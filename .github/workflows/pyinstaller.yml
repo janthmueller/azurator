@@ -17,25 +17,6 @@ on:
         required: false
         default: true
         type: boolean
-  workflow_dispatch:
-    inputs:
-      tag:
-        description: Existing release tag
-        required: true
-        type: string
-      checkout_ref:
-        description: Source ref for a non-uploading test build
-        required: false
-        default: ""
-        type: string
-      upload:
-        description: Attach archives to the named GitHub release
-        required: false
-        default: true
-        type: boolean
-
-permissions:
-  contents: read
 
 jobs:
   build:
@@ -160,32 +141,11 @@ jobs:
           "archive=$archive" >> $env:GITHUB_OUTPUT
           "checksum=$checksum" >> $env:GITHUB_OUTPUT
 
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+      - uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3
+        if: inputs.upload
         with:
-          name: azurator-binary-${{ matrix.asset-name }}
-          path: |
+          tag_name: ${{ env.RELEASE_TAG }}
+          files: |
             ${{ steps.package_unix.outputs.archive || steps.package_windows.outputs.archive }}
             ${{ steps.package_unix.outputs.checksum || steps.package_windows.outputs.checksum }}
-          if-no-files-found: error
-          retention-days: 7
-
-  publish:
-    if: inputs.upload
-    needs: build
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    permissions:
-      contents: write
-    steps:
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
-        with:
-          pattern: azurator-binary-*
-          path: dist
-          merge-multiple: true
-      - name: Attach archives and checksums to the release
-        env:
-          GH_TOKEN: ${{ github.token }}
-          RELEASE_TAG: ${{ inputs.tag }}
-        run: |
-          gh release view "$RELEASE_TAG" > /dev/null
-          gh release upload "$RELEASE_TAG" dist/*
+          fail_on_unmatched_files: true

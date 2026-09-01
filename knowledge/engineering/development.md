@@ -78,17 +78,19 @@ product provider. Fake-command harness tests remain part of `nix flake check`.
 The Nix package source remains an explicit filtered fileset. Ignored plans,
 dotenv files, virtual environments, caches, documentation dependencies, and
 build output must remain outside it. CI builds and smoke-tests the locked
-PyInstaller bundle on Linux, macOS, and Windows without publishing it. The
-manual binary workflow can attach checksummed archives to one existing release
-tag after verifying the checked-out commit. Binary archives contain the
-project license and the available license or notice files for the bundled
-Python runtime and packages.
+PyInstaller bundle on Linux, macOS, and Windows without publishing it. Release
+builds attach checksummed archives to the semantic-release tag after verifying
+the checked-out commit. Binary archives contain the project license and the
+available license or notice files for the bundled Python runtime and packages.
 
-The release workflow remains manual. It requires a successful Test workflow for
-the current `main` revision, creates the versioned distributions and GitHub
-release in a repository-write job, publishes the preserved distributions to
-PyPI from a separate OIDC-only job, and then builds the release-tag binaries.
-Do not dispatch it until the user explicitly declares the project ready.
+After a push to `main` passes the complete Test workflow, the Release workflow
+requires that tested revision to remain current and runs python-semantic-release.
+A manual dispatch is also available, but it requires a successful Test workflow
+for the current `main` revision. A qualifying conventional commit creates the
+versioned distributions and GitHub release in a repository-write job, publishes
+the preserved distributions to PyPI from a separate OIDC-only job, and then
+builds the release-tag binaries. The generated release commit skips CI to avoid
+starting a second release cycle.
 
 GitHub Actions are pinned to exact commits and maintained by Renovate. Normal
 quality, audit, package, release, and binary environments use `uv.lock`.

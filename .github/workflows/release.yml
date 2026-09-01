@@ -1,6 +1,10 @@
 name: Release
 
 on:
+  workflow_run:
+    workflows: ["Test"]
+    types: [completed]
+    branches: [main]
   workflow_dispatch:
 
 permissions:
@@ -13,10 +17,17 @@ concurrency:
 
 jobs:
   guard:
-    if: github.ref == 'refs/heads/main'
+    if: >
+      (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') ||
+      (
+        github.event.workflow_run.conclusion == 'success' &&
+        github.event.workflow_run.event == 'push' &&
+        github.event.workflow_run.head_branch == 'main'
+      )
     runs-on: ubuntu-latest
     timeout-minutes: 10
     outputs:
+      should_release: ${{ steps.check.outputs.should_release }}
       target_sha: ${{ steps.check.outputs.target_sha }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -27,18 +38,27 @@ jobs:
       - name: Require successful tests for the current main revision
         id: check
         env:
-          GH_TOKEN: ${{ github.token }}
+          TESTED_SHA: ${{ github.event.workflow_run.head_sha }}
         run: |
-          TARGET_SHA="$(git rev-parse HEAD)"
-          CONCLUSION="$(gh run list --workflow test.yml --commit "$TARGET_SHA" --status completed --limit 1 --json conclusion --jq '.[0].conclusion // ""')"
-          if [ "$CONCLUSION" != success ]; then
-            echo "::error::The current main revision has no successful completed Test workflow."
-            exit 1
+          if [ "${{ github.event_name }}" = workflow_dispatch ]; then
+            echo "should_release=true" >> "$GITHUB_OUTPUT"
+            echo "target_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+            exit 0
           fi
-          echo "target_sha=$TARGET_SHA" >> "$GITHUB_OUTPUT"
+
+          git fetch origin main
+          CURRENT_SHA="$(git rev-parse origin/main)"
+          if [ "$TESTED_SHA" = "$CURRENT_SHA" ]; then
+            echo "should_release=true" >> "$GITHUB_OUTPUT"
+            echo "target_sha=$TESTED_SHA" >> "$GITHUB_OUTPUT"
+          else
+            echo "Tested SHA $TESTED_SHA is no longer current main ($CURRENT_SHA); skipping release."
+            echo "should_release=false" >> "$GITHUB_OUTPUT"
+          fi
 
   release:
     needs: guard
+    if: needs.guard.outputs.should_release == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
@@ -59,6 +79,14 @@ jobs:
           git switch -C main "$TARGET_SHA"
           git branch --set-upstream-to=origin/main main
           test "$(git rev-parse HEAD)" = "$TARGET_SHA"
+      - name: Require successful tests for a manual release
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          SHA="$(git rev-parse HEAD)"
+          CONCLUSION="$(gh run list --workflow test.yml --commit "$SHA" --status completed --limit 1 --json conclusion --jq '.[0].conclusion // ""')"
+          test "$CONCLUSION" = success
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: "3.14"
