@@ -8,6 +8,8 @@ from pathlib import Path
 
 import pytest
 from azure.core.exceptions import HttpResponseError
+from typer.core import TyperGroup, TyperOption
+from typer.main import get_command
 from typer.testing import CliRunner
 
 import azurator.cli as cli_module
@@ -137,12 +139,22 @@ def test_match_rejects_ambiguous_input_and_warns_for_broad_file_permissions(
 
 
 def test_match_help_does_not_infer_a_security_state() -> None:
-    result = CliRunner().invoke(app, ["match", "--help"], terminal_width=180)
+    root_command = get_command(app)
+    assert isinstance(root_command, TyperGroup)
+    match_command = root_command.commands["match"]
+    option_names = {
+        name
+        for parameter in match_command.params
+        if isinstance(parameter, TyperOption)
+        for name in (*parameter.opts, *parameter.secondary_opts)
+    }
+
+    result = CliRunner().invoke(app, ["match", "--help"])
 
     assert result.exit_code == 0
-    assert "--stdin" in result.output
-    assert "--tokens-stdin" not in result.output
-    assert "--input-format" not in result.output
+    assert "--stdin" in option_names
+    assert "--tokens-stdin" not in option_names
+    assert "--input-format" not in option_names
     assert "compromised" not in result.output.casefold()
 
 

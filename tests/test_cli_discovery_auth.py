@@ -218,7 +218,8 @@ def test_discover_table_collapses_equivalent_provider_limitations(monkeypatch: p
     )
 
     assert result.exit_code == 0
-    assert result.stdout.count("Credential bindings and key-operation permissions are not checked by discover") == 1
+    normalized_output = " ".join(result.stdout.split())
+    assert normalized_output.count("Credential bindings and key-operation permissions are not checked by discover") == 1
     assert "Storage bindings not inspected" not in result.stdout
     assert "AI bindings not inspected" not in result.stdout
     assert "storage-bindings-not-inspected" not in result.stdout
