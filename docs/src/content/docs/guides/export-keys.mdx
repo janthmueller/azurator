@@ -1,0 +1,85 @@
+---
+title: Export Keys
+description: Create a new plaintext or SOPS-encrypted dotenv file from selected Azure key slots.
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+`azurator export` creates one new dotenv file from explicitly selected
+supported key slots. Choose plaintext or SOPS encryption through the output
+option.
+
+## Choose the output
+
+Create a SOPS-encrypted dotenv file without writing plaintext to disk:
+
+```bash
+azurator export --sops-out azure-keys.enc.env
+```
+
+SOPS 3.13.x must have a creation rule or environment configuration for the
+destination and an identity that can decrypt the result. Azurator encrypts and
+decrypts the generated document in memory to verify every assignment before it
+creates the ciphertext file. Environment selector names and SOPS metadata remain
+visible in the encrypted dotenv format.
+
+Create an explicitly plaintext dotenv file with:
+
+```bash
+azurator export --out azure-keys.env
+```
+
+<Aside type="caution" title="Plaintext export">
+Files created with `--out` contain live Azure keys in plaintext. Protect them as
+secrets and remove them when they are no longer needed.
+</Aside>
+
+## Select keys interactively
+
+Azurator shows retrievable slots from supported key resources. Accounts with key
+authentication disabled are omitted. Before retrieving values, it displays the
+complete resource, slot, and generated variable mapping and asks for
+confirmation.
+
+## Select keys in a script
+
+Use a complete top-level ARM resource ID followed by its exact slot:
+
+```bash
+azurator export \
+  --select '/subscriptions/<subscription-id>/resourceGroups/<group>/providers/Microsoft.Storage/storageAccounts/<account>#key1' \
+  --sops-out azure-keys.enc.env
+```
+
+Repeat `--select` for multiple slots. Storage uses `key1` and `key2`. Azure AI
+and Cognitive Services use `Key1` and `Key2`.
+
+Select every retrievable slot from supported key resources with:
+
+```bash
+azurator export --all --sops-out azure-keys.enc.env
+```
+
+`--all` remains limited to the selected subscription and supported key-resource
+types. It does not mean every secret in Azure.
+
+## Destination guarantees
+
+Export creates one new mode-`0600` file on POSIX systems and never prints key
+values. Exactly one of `--out` and `--sops-out` is required. The destination
+must not already exist. Azurator never infers encryption from a filename and
+never overwrites, merges, appends, or writes exported values to stdout.
+Cancellation and failures leave no destination.
+
+Use `-y` to skip the confirmation after the complete valid export intent is
+displayed. It does not bypass selection or destination checks.
+
+An exported file can be matched or rotated later with its corresponding input
+option:
+
+```bash
+azurator match --env-file azure-keys.env
+azurator rotate --env-file azure-keys.env
+azurator match --sops-file azure-keys.enc.env
+azurator rotate --sops-file azure-keys.enc.env
+```

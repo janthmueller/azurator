@@ -1,0 +1,191 @@
+name: Build binaries
+
+on:
+  workflow_call:
+    inputs:
+      tag:
+        description: Existing release tag or synthetic non-uploading build label
+        required: true
+        type: string
+      checkout_ref:
+        description: Source ref to build instead of the release tag
+        required: false
+        default: ""
+        type: string
+      upload:
+        description: Attach archives to the named GitHub release
+        required: false
+        default: true
+        type: boolean
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing release tag
+        required: true
+        type: string
+      checkout_ref:
+        description: Source ref for a non-uploading test build
+        required: false
+        default: ""
+        type: string
+      upload:
+        description: Attach archives to the named GitHub release
+        required: false
+        default: true
+        type: boolean
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-22.04
+            asset-name: azurator-linux-ubuntu-22.04
+          - os: macos-15
+            asset-name: azurator-macos-15
+          - os: windows-2022
+            asset-name: azurator-windows-2022
+    steps:
+      - name: Validate requested source
+        shell: bash
+        env:
+          REQUESTED_TAG: ${{ inputs.tag }}
+          CHECKOUT_REF: ${{ inputs.checkout_ref }}
+          UPLOAD_RELEASE: ${{ inputs.upload }}
+        run: |
+          if [[ ! "$REQUESTED_TAG" =~ ^v?[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z]+)*$ ]]; then
+            echo "Expected a semantic-version release tag, got: $REQUESTED_TAG" >&2
+            exit 2
+          fi
+          if [ "$UPLOAD_RELEASE" = true ] && [ -n "$CHECKOUT_REF" ]; then
+            echo "checkout_ref may be used only for non-uploading test builds" >&2
+            exit 2
+          fi
+          echo "RELEASE_TAG=$REQUESTED_TAG" >> "$GITHUB_ENV"
+          RAW_ARCH="$(uname -m)"
+          case "$RAW_ARCH" in
+            x86_64|amd64) BINARY_ARCH=x86_64 ;;
+            aarch64|arm64) BINARY_ARCH=arm64 ;;
+            *) BINARY_ARCH="$RAW_ARCH" ;;
+          esac
+          echo "BINARY_ARCH=$BINARY_ARCH" >> "$GITHUB_ENV"
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          ref: ${{ inputs.checkout_ref || inputs.tag }}
+
+      - name: Verify uploaded source matches the release tag
+        if: inputs.upload
+        shell: bash
+        run: |
+          TAG_SHA="$(git rev-parse "${RELEASE_TAG}^{commit}")"
+          HEAD_SHA="$(git rev-parse HEAD)"
+          test "$HEAD_SHA" = "$TAG_SHA"
+
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.14"
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          version: "0.11.28"
+          enable-cache: true
+      - run: uv sync --locked --extra release
+
+      - name: Verify binary entry point exists
+        shell: bash
+        run: test -f azurator/__main__.py
+
+      - name: Build binary
+        run: uv run --locked pyinstaller --noconfirm --clean --paths . --name azurator azurator/__main__.py
+
+      - name: Add project and dependency notices
+        run: uv run --locked python .github/scripts/prepare_binary_bundle.py dist/azurator
+
+      - name: Smoke-test binary
+        shell: bash
+        env:
+          UPLOAD_RELEASE: ${{ inputs.upload }}
+        run: |
+          if [ "$UPLOAD_RELEASE" = true ]; then
+            TAG_VERSION="${RELEASE_TAG#v}"
+            EXPECTED="$(uv run --locked python -c 'import sys; from packaging.version import Version; print(Version(sys.argv[1]))' "$TAG_VERSION")"
+          else
+            EXPECTED="$(uv run --locked python -c 'from importlib.metadata import version; print(version("azurator"))')"
+          fi
+          if [ "${{ runner.os }}" = Windows ]; then
+            BINARY=dist/azurator/azurator.exe
+          else
+            BINARY=dist/azurator/azurator
+          fi
+          test "$("$BINARY" --version)" = "azurator $EXPECTED"
+          "$BINARY" --help > binary-help.txt
+          "$BINARY" list --json > binary-list.json
+          uv run --locked python -c 'import json; json.load(open("binary-list.json", encoding="utf-8"))'
+          test -f dist/azurator/LICENSE
+          test -f dist/azurator/README.md
+          test -f dist/azurator/THIRD_PARTY_NOTICES.md
+          test -n "$(find dist/azurator/licenses -type f -print -quit)"
+
+      - name: Package binary on Unix
+        if: runner.os != 'Windows'
+        id: package_unix
+        shell: bash
+        run: |
+          ARCHIVE_NAME="${{ matrix.asset-name }}-${BINARY_ARCH}-${RELEASE_TAG}.tar.gz"
+          ARCHIVE="dist/$ARCHIVE_NAME"
+          tar -czf "$ARCHIVE" -C dist azurator
+          CHECKSUM="$ARCHIVE.sha256"
+          (cd dist && shasum -a 256 "$ARCHIVE_NAME") > "$CHECKSUM"
+          echo "archive=$ARCHIVE" >> "$GITHUB_OUTPUT"
+          echo "checksum=$CHECKSUM" >> "$GITHUB_OUTPUT"
+
+      - name: Package binary on Windows
+        if: runner.os == 'Windows'
+        id: package_windows
+        shell: pwsh
+        run: |
+          $archive = "dist/${{ matrix.asset-name }}-$env:BINARY_ARCH-$env:RELEASE_TAG.zip"
+          Compress-Archive -Path "dist/azurator/*" -DestinationPath $archive
+          $checksum = "$archive.sha256"
+          $hash = (Get-FileHash -Algorithm SHA256 $archive).Hash.ToLowerInvariant()
+          "$hash  $([IO.Path]::GetFileName($archive))" | Set-Content -Encoding ascii $checksum
+          "archive=$archive" >> $env:GITHUB_OUTPUT
+          "checksum=$checksum" >> $env:GITHUB_OUTPUT
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: azurator-binary-${{ matrix.asset-name }}
+          path: |
+            ${{ steps.package_unix.outputs.archive || steps.package_windows.outputs.archive }}
+            ${{ steps.package_unix.outputs.checksum || steps.package_windows.outputs.checksum }}
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    if: inputs.upload
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          pattern: azurator-binary-*
+          path: dist
+          merge-multiple: true
+      - name: Attach archives and checksums to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          gh release view "$RELEASE_TAG" > /dev/null
+          gh release upload "$RELEASE_TAG" dist/*

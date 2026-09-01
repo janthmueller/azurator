@@ -1,0 +1,81 @@
+---
+title: Authentication
+description: Sign in to Azure and select the subscription Azurator should use.
+---
+
+## Azure CLI login
+
+The default login uses Azure CLI:
+
+```bash
+azurator login
+```
+
+Azure CLI opens its normal browser flow and subscription picker. Azurator saves
+the selected subscription as its default scope, so later commands do not need
+its UUID.
+
+Use device code login on a terminal without a browser:
+
+```bash
+azurator login --use-device-code
+```
+
+## Check or change the selection
+
+```bash
+azurator auth status
+azurator auth status --json
+```
+
+This verifies authentication and shows the selected subscription. Run
+`azurator login` again when you want to choose another account or subscription.
+
+Forget only Azurator's saved adapter and subscription selection with:
+
+```bash
+azurator auth clear
+```
+
+This does not sign out Azure CLI. Use Azure CLI itself when you want to remove
+its account sessions. Without a saved Azurator record, later commands use the
+current Azure CLI account and subscription by default.
+
+Override the subscription for one resource command when needed:
+
+```bash
+azurator discover --subscription <subscription-id>
+```
+
+The override changes only that command's scope. It does not sign in again or
+change the saved default.
+
+## Other authentication methods
+
+Native browser and device-code adapters require a Microsoft Entra public-client
+application ID:
+
+```bash
+azurator login --method browser \
+  --client-id <application-id> \
+  --tenant <tenant-id> \
+  --subscription <subscription-id>
+```
+
+Use `--method device-code` for the equivalent native device flow.
+
+For an unattended identity, provide Azure Identity's standard environment
+variables:
+
+```bash
+export AZURE_TENANT_ID=<tenant-id>
+export AZURE_CLIENT_ID=<application-id>
+export AZURE_CLIENT_SECRET=<secret>
+export AZURE_SUBSCRIPTION_ID=<subscription-id>
+azurator login --method environment
+```
+
+Azurator stores the selected method and non-secret scope metadata. It does not
+copy passwords, client secrets, or Azure tokens into its configuration.
+
+Continue with [First Rotation](../first-rotation/).

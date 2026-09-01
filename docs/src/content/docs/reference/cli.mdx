@@ -1,0 +1,137 @@
+---
+title: CLI Reference
+description: Choose the Azurator command, input mode, and output needed for a workflow.
+---
+
+Run `azurator --help` or `azurator COMMAND --help` for the exact options
+available in your installed version.
+
+## Command map
+
+| Command | Purpose |
+| --- | --- |
+| `azurator login` | Sign in and choose the default subscription. |
+| `azurator auth status` | Verify authentication and show the active subscription. |
+| `azurator auth clear` | Forget Azurator's saved login method and subscription selection. |
+| `azurator list` | Show the key-resource and configuration types supported by this build. |
+| `azurator discover` | List supported key resources without retrieving key values. |
+| `azurator match` | Find supported Azure key slots equal to supplied dotenv values. |
+| `azurator export` | Create a new plaintext or SOPS-encrypted dotenv file from selected slots. |
+| `azurator plan` | Preview a rotation without changing Azure or a file. |
+| `azurator rotate` | Build and execute a plan, execute a saved plan, or resume an operation. |
+| `azurator operation list` | List retained local recovery operations. |
+| `azurator operation show` | Inspect one retained operation and its resume command. |
+
+`list` and the two `operation` commands do not sign in or contact Azure.
+
+## Choose an input
+
+`plan` and `rotate` can open an interactive key-slot picker:
+
+```bash
+azurator plan
+azurator rotate
+```
+
+For a script, identify each slot with a complete top-level ARM resource ID:
+
+```bash
+azurator rotate --select '<arm-resource-id>#key1'
+```
+
+Repeat `--select` to choose more than one slot. The ARM ID must belong to the
+active subscription.
+
+Use a file when it should also be updated during rotation:
+
+```bash
+azurator rotate --env-file secrets.env
+azurator rotate --sops-file secrets.enc.env
+```
+
+Use standard input only for matching or planning values without a managed file:
+
+```bash
+azurator match --stdin < secrets.env
+azurator plan --stdin < secrets.env
+```
+
+The input modes are mutually exclusive. Raw keys are never accepted as ordinary
+command arguments.
+
+## Subscription and Azure configuration
+
+Resource commands use the subscription selected during login. Override it for
+one command with `--subscription <subscription-id>`. This does not change the
+saved selection. See [Authentication](../../getting-started/authentication/).
+
+Azurator inspects supported Azure configuration that may store selected keys by
+default. Use `--skip-azure-bindings` with `match`, `plan`, or direct `rotate` to
+omit all of that inspection. An explicitly selected plaintext or SOPS file
+remains included and is still updated by `rotate`. A plan created this way
+carries a confirmation warning because Azure-side configuration may still
+contain an old key.
+
+## Preview and rotate
+
+`plan` prints a readable preview and does not create a file unless requested:
+
+```bash
+azurator plan --env-file secrets.env
+azurator plan --env-file secrets.env --out plan.json
+azurator plan --env-file secrets.env --json
+```
+
+`--out` saves a private JSON plan. `--json` writes the same structured plan to
+standard output. Execute a saved plan with:
+
+```bash
+azurator rotate --plan plan.json
+```
+
+A plan created from standard input needs the same input again:
+
+```bash
+azurator rotate --plan plan.json --stdin < secrets.env
+```
+
+Direct `rotate` builds and displays the same plan in memory, then asks once
+before changing anything. Use `-y` or `--yes` to accept a valid displayed plan
+without the prompt. It cannot bypass a blocked plan, changed state, missing
+permissions, or input validation.
+
+## Machine-readable output
+
+Use `--json` with `list`, `discover`, `match`, `plan`, `auth status`, and the
+`operation` inspection commands. `match --matrix` prints a selector-by-resource
+table instead of the normal match list. `discover --out` saves a private JSON
+inventory.
+
+Structured output never contains raw Azure keys. It can contain subscription
+IDs, ARM resource IDs, endpoints, configuration relationships, selector names,
+and local file paths, so review it before storing or sharing it.
+
+Contract IDs and versions in `list --json` describe Azurator's installed
+provider behavior. They are not Azure REST API or SDK versions.
+
+## Export and recovery
+
+Export requires exactly one new destination:
+
+```bash
+azurator export --out keys.env
+azurator export --sops-out keys.enc.env
+```
+
+See [Export Keys](../../guides/export-keys/) for selection and file guarantees.
+
+After an interrupted rotation, use:
+
+```bash
+azurator operation list
+azurator operation show <operation-id>
+azurator rotate --resume <operation-id>
+```
+
+See [Resume a Rotation](../../guides/resume-rotation/) before changing or
+removing files associated with a retained operation.

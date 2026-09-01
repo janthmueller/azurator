@@ -1,0 +1,50 @@
+---
+title: Rotate a SOPS File
+description: Rotate Azure keys stored in a SOPS-encrypted dotenv file.
+---
+
+Use this workflow when a SOPS-encrypted dotenv file contains supported Azure
+account keys.
+
+## Requirements
+
+- SOPS 3.13.x
+- an existing SOPS-encrypted dotenv file
+- a configured SOPS identity or KMS backend
+
+The ciphertext must be a regular non-symlink file owned by the current user and
+no larger than 8 MiB. On POSIX systems it must not be writable by group or other
+users. Decrypted dotenv content is limited to 1 MiB.
+
+SOPS resolves its identities through its normal configuration. Do not put a
+private identity or raw key in the command line.
+
+## Inspect, preview, and rotate
+
+```bash
+azurator match --sops-file secrets.enc.env
+azurator plan --sops-file secrets.enc.env
+azurator rotate --sops-file secrets.enc.env
+```
+
+`match` reports exact top-level assignment matches. `plan` shows the complete
+update sequence. `rotate` displays the same plan, asks for confirmation, and
+executes it.
+
+## Update behavior
+
+Azurator decrypts content only in memory and sends replacement values to SOPS
+through standard input. It updates an encrypted temporary file, verifies
+selected and unrelated assignments, then atomically replaces the unchanged
+source. Azurator never writes decrypted SOPS content to disk.
+
+When possible, assignments move to the sibling key before a selected slot is
+regenerated. They then move to the new value and are verified. Both slots of one
+account rotate sequentially when both are selected.
+
+Do not edit the same file concurrently. An interruption may leave it on a valid
+bridge key until you [resume the rotation](../resume-rotation/). Azurator does
+not reload or health-check workloads that read the file.
+
+`azurator export --sops-out new.enc.env` can create a new SOPS-encrypted dotenv
+file. It never merges into or replaces an existing file.

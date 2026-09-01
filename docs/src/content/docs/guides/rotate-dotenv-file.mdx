@@ -1,0 +1,71 @@
+---
+title: Rotate a dotenv File
+description: Rotate Azure keys and replace their values in an existing dotenv file.
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+Use this workflow when an existing dotenv file contains supported Azure account
+keys.
+
+<Aside type="caution" title="Plaintext at rest">
+Azurator does not encrypt the file. Use this workflow only when plaintext secret
+storage is appropriate for your environment.
+</Aside>
+
+## File requirements
+
+The file must:
+
+- already exist
+- be a regular non-symlink file owned by the current user
+- be no larger than 1 MiB
+- use `NAME=value` assignments with unique names
+
+Assignments may start with `export`, and whole values may use single or double
+quotes. Comments must use their own lines. Azurator does not evaluate variable
+interpolation, escapes, or inline comments.
+
+On POSIX systems, broad group or other read/write access produces a
+least-privilege warning. It does not block rotation or change the permissions.
+
+## Inspect, preview, and rotate
+
+```bash
+azurator match --env-file .env
+azurator plan --env-file .env
+azurator rotate --env-file .env
+```
+
+`match` reports which variables equal supported Azure key slots. `plan` shows
+the complete update sequence. `rotate` displays the same plan, asks for
+confirmation, and executes it.
+
+Supported Azure entries that store a matched key are included by default.
+Azurator calls the file assignments and those Azure entries
+[credential bindings](../../reference/supported-keys-and-bindings/#credential-bindings).
+
+## Update behavior
+
+- Several variables containing the same key are updated together.
+- Unmatched assignments, comments, and line endings are preserved.
+- Atomic replacement preserves the POSIX mode, owner, and group.
+- A variable matching more than one Azure slot is rejected.
+- When both slots of one account are selected, they rotate sequentially and
+  assignments finish on their corresponding new values.
+
+Azurator normally moves known bindings to the sibling key before regenerating a
+selected slot, then moves them to the new value and verifies them. If no usable
+sibling exists, the plan warns about the expected interruption before you can
+confirm it.
+
+Updating App Service application settings restarts the affected app. Do not edit
+the same dotenv file or deploy affected App Service settings during rotation.
+
+## Interruption and workload limits
+
+An interrupted file may remain on a valid bridge key until the operation is
+resumed. Azurator verifies stored values but does not reload or health-check
+workloads that read them.
+
+See [Resume a Rotation](../resume-rotation/) for recovery commands.

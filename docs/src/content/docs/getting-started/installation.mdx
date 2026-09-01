@@ -1,0 +1,58 @@
+---
+title: Installation
+description: Install Azurator with pipx, pip, a prebuilt archive, or Nix.
+---
+
+Python installs require Python 3.10 or newer. The default login flow also
+requires the [Azure CLI](https://learn.microsoft.com/cli/azure/install-azure-cli).
+
+## pipx
+
+Recommended for an isolated CLI installation:
+
+```bash
+pipx install azurator
+```
+
+## pip
+
+```bash
+pip install azurator
+```
+
+Use this when you already manage the Python environment yourself.
+
+## Prebuilt archives
+
+Download the archive for your operating system from the
+[latest GitHub release](https://github.com/janthmueller/azurator/releases/latest),
+extract it, and run `azurator` from a terminal. The archive includes Python but
+does not replace Azure CLI or SOPS when your chosen workflow requires them.
+
+## Nix
+
+With flakes enabled, run Azurator without installing it:
+
+```bash
+nix run github:janthmueller/azurator -- --help
+```
+
+Arguments after `--` are passed to Azurator:
+
+```bash
+nix run github:janthmueller/azurator -- list
+```
+
+## Optional SOPS support
+
+Using `--sops-file` or `--sops-out` requires SOPS 3.13.x. The Nix package
+includes it. Python installations use the `sops` executable already available
+on your system.
+
+## Verify
+
+```bash
+azurator --version
+```
+
+Continue with [Authentication](../authentication/).

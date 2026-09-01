@@ -1,0 +1,116 @@
+---
+title: Supported Key Resources and Bindings
+description: Azure key resources and credential bindings Azurator supports.
+---
+
+Azurator supports a defined set of Azure account keys and configuration that
+stores them. It does not scan every secret in a subscription.
+
+Show the types supported by your installed version:
+
+```bash
+azurator list
+```
+
+Use `--key-resources` or `--bindings` to show one category. This command does
+not sign in or contact Azure. Use `azurator discover` to list actual supported
+key resources in the selected subscription.
+
+## Key resources
+
+A key resource is the Azure account that owns a supported key pair.
+
+| Azure key resource | Slots | Discovery | Retrieval and rotation |
+| --- | --- | --- | --- |
+| Storage Account | `key1`, `key2` | Supported | Supported when Shared Key authentication is enabled. |
+| Azure AI, Cognitive Services, and Azure OpenAI account | `Key1`, `Key2` | Supported | Supported when local key authentication is enabled. |
+
+`discover` shows key authentication as `enabled` or `disabled`. Disabled key
+resources remain visible, but their slots are not offered for export, planning,
+or rotation.
+
+An enabled state does not prove that the signed-in identity can retrieve or
+rotate keys. Discovery does not test those later permissions.
+
+## Credential bindings
+
+A credential binding is a separate configuration entry that stores one key
+value. A consumer or workload is a running application, deployment, model, or
+process that reads a binding. Finding a binding does not prove active workload
+use.
+
+Azurator can update these bindings:
+
+| Location | Binding |
+| --- | --- |
+| Local | Exact matched assignments in one selected plaintext dotenv file. |
+| Local | Exact matched top-level assignments in one selected SOPS-encrypted dotenv file. |
+| Azure | Public-cloud, project-level Foundry `AzureStorageAccount` connections using `AccountKey`. |
+| Azure | Public-cloud, project-level Foundry `AzureOpenAI` connections using `ApiKey`. |
+| Azure | Exact whole-value application settings on visible top-level App Service apps. |
+
+Foundry inspection identifies a stored connection record below a project. It
+does not prove that the project, a deployment, or a model actively uses it.
+
+For App Service, Azurator reads the complete application-settings dictionary
+and keeps only exact key matches. Updating it restarts the app and replaces the
+complete freshly read dictionary. Do not run concurrent settings edits or
+deployments. Deployment slots and connection strings are not inspected.
+
+Azurator verifies binding values after every update. It does not invoke models,
+read application data, reload workloads, or perform health checks.
+
+No listed binding means only that Azurator found no match among the binding
+types above. It does not prove that no other configuration or running workload
+uses the key.
+
+## Export
+
+`azurator export` can create one new private dotenv file containing selected
+retrievable Storage or Azure AI account key slots. `--out` creates plaintext.
+`--sops-out` encrypts and verifies the document through SOPS without writing
+plaintext to disk. Neither mode overwrites an existing file.
+
+## Not supported
+
+- universal Azure secret discovery
+- Microsoft Entra application client secrets
+- SAS tokens, passwords, certificates, and values Azure cannot retrieve after creation
+- unsupported Foundry connection types or scopes
+- App Service deployment slots, connection strings, and embedded values
+- Key Vault references, Container Apps, Kubernetes, pipelines, and arbitrary application configuration
+- workload reloads and health checks
+
+If Azurator finds a relevant binding it cannot update and verify safely, it
+blocks the rotation instead of leaving that binding on the old key.
+
+## Permissions
+
+Key-resource discovery, key access, rotation, and binding updates are separate
+Azure operations. The signed-in identity needs the permissions used by the
+requested workflow at the narrowest practical scope.
+
+| Azurator operation | Azure permissions used |
+| --- | --- |
+| Discover Storage Accounts | `Microsoft.Storage/storageAccounts/read` |
+| Read Storage keys | `Microsoft.Storage/storageAccounts/listkeys/action` |
+| Rotate a Storage key | `Microsoft.Storage/storageAccounts/regeneratekey/action` |
+| Discover Azure AI accounts | `Microsoft.CognitiveServices/accounts/read` |
+| Read Azure AI keys | `Microsoft.CognitiveServices/accounts/listKeys/action` |
+| Rotate an Azure AI key | `Microsoft.CognitiveServices/accounts/regenerateKey/action` |
+| Inspect Foundry projects and connections | `Microsoft.CognitiveServices/accounts/projects/read`, `Microsoft.CognitiveServices/accounts/projects/connections/read`, and `Microsoft.CognitiveServices/accounts/projects/connections/listsecrets/action` |
+| Update a Foundry connection | `Microsoft.CognitiveServices/accounts/projects/connections/write` plus Foundry data-plane access |
+| Inspect App Service settings | `Microsoft.Web/sites/read` and `Microsoft.Web/sites/config/list/action` |
+| Update App Service settings | `Microsoft.Web/sites/config/write` |
+
+Foundry connection access also requires the **Foundry User** role or equivalent
+Foundry data-plane permissions. Azure Owner or Contributor grants broad control-
+plane access but does not by itself grant Foundry data-plane access.
+
+See Microsoft's permission references for
+[Storage management](https://learn.microsoft.com/en-us/azure/storage/common/authorization-resource-provider),
+[AI and Cognitive Services](https://learn.microsoft.com/en-us/azure/role-based-access-control/permissions/ai-machine-learning),
+[Foundry RBAC](https://learn.microsoft.com/en-us/azure/foundry/concepts/rbac-foundry),
+and [App Service configuration](https://learn.microsoft.com/en-us/azure/service-connector/concept-permission).
+Missing access blocks the affected operation and is never treated as a
+successful no-match.

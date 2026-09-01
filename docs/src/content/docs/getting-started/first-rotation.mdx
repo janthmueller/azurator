@@ -1,0 +1,65 @@
+---
+title: First Rotation
+description: Rotate Azure keys already stored in a dotenv file.
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+This example uses an existing `.env` file containing a Storage Account, Azure
+AI, Cognitive Services, or Azure OpenAI key.
+
+<Aside type="caution" title="Rotation changes Azure">
+Azure cannot restore a regenerated key. Azurator displays every planned change
+and asks before it starts.
+</Aside>
+
+## Sign in
+
+```bash
+azurator login
+```
+
+Choose the subscription containing the key resources.
+
+## Rotate the matched keys
+
+```bash
+azurator rotate --env-file .env
+```
+
+Azurator then:
+
+1. matches dotenv values to supported Azure key slots
+2. finds supported Azure configuration that stores the same keys
+3. displays the complete rotation plan
+4. asks once for confirmation
+5. rotates the keys, updates each listed entry, and verifies the stored values
+
+Azurator checks only its documented configuration types. Finding no stored copy
+does not prove that no other configuration or running workload uses the key.
+
+When possible, Azurator temporarily moves known configuration to the account's
+other valid key before rotating the selected slot. Only matching dotenv values
+are replaced. Other variables, comments, and line endings remain unchanged.
+
+Updating App Service application settings restarts the affected app. Avoid
+editing or deploying those settings during rotation.
+
+## Inspect without changing anything
+
+Show matches:
+
+```bash
+azurator match --env-file .env
+```
+
+Preview the rotation plan:
+
+```bash
+azurator plan --env-file .env
+```
+
+See [Rotate a dotenv File](../../guides/rotate-dotenv-file/) for the supported
+file format and interruption behavior. Use
+[Rotate a SOPS File](../../guides/rotate-sops-file/) for an encrypted dotenv
+file. Run `azurator rotate` without a file option to choose keys interactively.

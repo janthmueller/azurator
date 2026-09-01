@@ -1,0 +1,47 @@
+---
+title: Resume a Rotation
+description: Inspect and continue an interrupted rotation.
+---
+
+Azurator writes local recovery state after confirmation and before the first
+Azure mutation. Successful rotations remove it automatically. A failure or
+interruption retains one operation ID.
+
+## Inspect retained operations
+
+```bash
+azurator operation list
+azurator operation show <operation-id>
+```
+
+These commands inspect local state only. They do not authenticate or contact
+Azure. Their output omits raw keys, resource IDs, file paths, and the embedded
+plan.
+
+## Resume
+
+Use the command printed after the failure or by `operation show`:
+
+```bash
+azurator rotate --resume <operation-id>
+```
+
+If the operation came from standard input and no step started, repeat the same
+input as directed:
+
+```bash
+azurator rotate --resume <operation-id> --stdin < secrets.env
+```
+
+Operations created with `--env-file` or `--sops-file` re-read the recorded file.
+Keep that file available and do not edit it during recovery.
+
+Before continuing, Azurator checks the subscription, current Azure keys, known
+credential bindings, and recorded progress. If a request may already have
+succeeded, it checks the current state instead of rotating blindly. Unexpected
+changes stop the resume.
+
+Resume continues the recorded operation. It does not roll back completed Azure
+changes. Do not run the same operation ID concurrently.
+
+After verified completion, the operation disappears from `operation list`.

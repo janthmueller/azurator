@@ -1,0 +1,143 @@
+name: Release
+
+on:
+  workflow_dispatch:
+
+permissions:
+  actions: read
+  contents: read
+
+concurrency:
+  group: release-main
+  cancel-in-progress: false
+
+jobs:
+  guard:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      target_sha: ${{ steps.check.outputs.target_sha }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          ref: main
+      - name: Require successful tests for the current main revision
+        id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TARGET_SHA="$(git rev-parse HEAD)"
+          CONCLUSION="$(gh run list --workflow test.yml --commit "$TARGET_SHA" --status completed --limit 1 --json conclusion --jq '.[0].conclusion // ""')"
+          if [ "$CONCLUSION" != success ]; then
+            echo "::error::The current main revision has no successful completed Test workflow."
+            exit 1
+          fi
+          echo "target_sha=$TARGET_SHA" >> "$GITHUB_OUTPUT"
+
+  release:
+    needs: guard
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      actions: read
+      contents: write
+    outputs:
+      released: ${{ steps.release_state.outputs.released }}
+      tag: ${{ steps.release_state.outputs.tag }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+          ref: ${{ needs.guard.outputs.target_sha }}
+      - name: Prepare the tested main revision
+        env:
+          TARGET_SHA: ${{ needs.guard.outputs.target_sha }}
+        run: |
+          git switch -C main "$TARGET_SHA"
+          git branch --set-upstream-to=origin/main main
+          test "$(git rev-parse HEAD)" = "$TARGET_SHA"
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.14"
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          version: "0.11.28"
+          enable-cache: true
+      - run: uv sync --locked --extra release
+      - name: Version and build release
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
+          GIT_COMMITTER_NAME: github-actions[bot]
+          GIT_COMMITTER_EMAIL: github-actions[bot]@users.noreply.github.com
+        run: uv run --locked semantic-release version --as-prerelease --prerelease-token alpha
+      - name: Detect release
+        id: release_state
+        shell: bash
+        run: |
+          if [[ -d dist ]] && compgen -G "dist/*" > /dev/null; then
+            echo "released=true" >> "$GITHUB_OUTPUT"
+            echo "tag=$(git describe --tags --abbrev=0)" >> "$GITHUB_OUTPUT"
+          else
+            echo "released=false" >> "$GITHUB_OUTPUT"
+            echo "No new release artifacts were produced; skipping publication."
+          fi
+      - if: steps.release_state.outputs.released == 'true'
+        run: uv run --locked python -m twine check dist/*
+      - name: Smoke-test release wheel
+        if: steps.release_state.outputs.released == 'true'
+        shell: bash
+        run: |
+          python -m venv release-wheel-smoke
+          release-wheel-smoke/bin/python -m pip install dist/*.whl
+          release-wheel-smoke/bin/python -m pip check
+          release-wheel-smoke/bin/azurator --version
+          release-wheel-smoke/bin/azurator list --json > release-wheel-list.json
+          release-wheel-smoke/bin/python -c 'import json; json.load(open("release-wheel-list.json", encoding="utf-8"))'
+      - name: Preserve Python distributions
+        if: steps.release_state.outputs.released == 'true'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: python-distributions
+          path: dist/
+          if-no-files-found: error
+      - name: Publish GitHub release
+        if: steps.release_state.outputs.released == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
+          GIT_COMMITTER_NAME: github-actions[bot]
+          GIT_COMMITTER_EMAIL: github-actions[bot]@users.noreply.github.com
+        run: uv run --locked semantic-release publish
+
+  pypi:
+    needs: release
+    if: needs.release.outputs.released == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment:
+      name: pypi
+      url: https://pypi.org/project/azurator/
+    permissions:
+      actions: read
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: python-distributions
+          path: dist/
+      - uses: pypa/gh-action-pypi-publish@ed0c53931b1dc9bd32cbe73a98c7f6766f8a527e # v1.13.0
+        with:
+          skip-existing: true
+
+  binaries:
+    needs: release
+    if: needs.release.outputs.released == 'true'
+    uses: ./.github/workflows/pyinstaller.yml
+    with:
+      tag: ${{ needs.release.outputs.tag }}
+      upload: true
+    permissions:
+      contents: write

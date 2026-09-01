@@ -1,0 +1,232 @@
+name: Test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  pytest:
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        python-version: ["3.10", "3.11", "3.12", "3.13", "3.14"]
+        include:
+          - os: macos-latest
+            python-version: "3.14"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: ${{ matrix.python-version }}
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          version: "0.11.28"
+          enable-cache: true
+      - run: uv sync --locked --extra dev
+      - run: uv run --locked pytest -q
+
+  quality:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.14"
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          version: "0.11.28"
+          enable-cache: true
+      - run: uv sync --locked --extra dev
+      - run: uv run --locked ruff check .
+      - run: uv run --locked ruff format --check .
+      - run: uv run --locked pyright
+      - run: uv run --locked pytest -q --cov --cov-report=term-missing
+      - run: uv run --locked python .github/scripts/check_knowledge.py
+
+  minimum-runtime-dependencies:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.10"
+      - name: Install declared runtime floors
+        run: |
+          python -m pip install \
+            "azure-ai-projects==2.3.0" \
+            "azure-core==1.37.0" \
+            "azure-identity==1.25.0" \
+            "azure-mgmt-cognitiveservices==14.1.0" \
+            "azure-mgmt-core==1.6.0" \
+            "azure-mgmt-storage==25.1.0" \
+            "azure-mgmt-web==11.0.1" \
+            "platformdirs==4.3.0" \
+            "pydantic==2.12.0" \
+            "rich==14.0.0" \
+            "typer==0.24.0" \
+            "hypothesis>=6" \
+            "pytest>=8"
+          python -m pip install --no-deps -e .
+      - run: python -m pytest -q
+
+  docs:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6
+        with:
+          version: 11.11.0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: 24.18.0
+          cache: pnpm
+          cache-dependency-path: docs/pnpm-lock.yaml
+      - working-directory: docs
+        run: pnpm install --frozen-lockfile
+      - working-directory: docs
+        run: pnpm check
+      - working-directory: docs
+        run: pnpm build
+
+  python-audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.14"
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          version: "0.11.28"
+          enable-cache: true
+      - run: uv sync --locked --extra audit
+      - run: uv run --locked python -m pip_audit .
+
+  docs-audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6
+        with:
+          version: 11.11.0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: 24.18.0
+          cache: pnpm
+          cache-dependency-path: docs/pnpm-lock.yaml
+      - working-directory: docs
+        run: pnpm install --frozen-lockfile
+      - working-directory: docs
+        run: pnpm audit --audit-level high
+
+  package:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.14"
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          version: "0.11.28"
+          enable-cache: true
+      - run: uv sync --locked --extra release
+      - run: uv run --locked python -m build
+      - run: uv run --locked python -m twine check dist/*
+      - name: Smoke-test wheel
+        shell: bash
+        run: |
+          python -m venv wheel-smoke
+          wheel-smoke/bin/python -m pip install dist/*.whl
+          wheel-smoke/bin/python -m pip check
+          wheel-smoke/bin/azurator --version
+          wheel-smoke/bin/azurator list --json > wheel-list.json
+          wheel-smoke/bin/python -c 'import json; json.load(open("wheel-list.json", encoding="utf-8"))'
+      - name: Smoke-test source distribution
+        shell: bash
+        run: |
+          python -m venv sdist-smoke
+          sdist-smoke/bin/python -m pip install dist/*.tar.gz
+          sdist-smoke/bin/python -m pip check
+          sdist-smoke/bin/azurator --help > /dev/null
+          sdist-smoke/bin/azurator list --json > sdist-list.json
+          sdist-smoke/bin/python -c 'import json; json.load(open("sdist-list.json", encoding="utf-8"))'
+
+  binaries:
+    uses: ./.github/workflows/pyinstaller.yml
+    with:
+      tag: v0.0.0
+      checkout_ref: ${{ github.sha }}
+      upload: false
+    permissions:
+      contents: read
+
+  nix:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: cachix/install-nix-action@8aa03977d8d733052d78f4e008a241fd1dbf36b3 # v31.10.6
+      - run: nix flake check --print-build-logs
+
+  build:
+    if: always()
+    needs:
+      - pytest
+      - quality
+      - minimum-runtime-dependencies
+      - docs
+      - python-audit
+      - docs-audit
+      - package
+      - binaries
+      - nix
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Verify all required jobs passed
+        shell: bash
+        run: |
+          test "${{ needs.pytest.result }}" = "success"
+          test "${{ needs.quality.result }}" = "success"
+          test "${{ needs.minimum-runtime-dependencies.result }}" = "success"
+          test "${{ needs.docs.result }}" = "success"
+          test "${{ needs.python-audit.result }}" = "success"
+          test "${{ needs.docs-audit.result }}" = "success"
+          test "${{ needs.package.result }}" = "success"
+          test "${{ needs.binaries.result }}" = "success"
+          test "${{ needs.nix.result }}" = "success"

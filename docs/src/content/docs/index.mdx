@@ -1,0 +1,55 @@
+---
+title: Azurator
+description: Rotate shared Azure account keys and update supported configuration.
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+Azurator is a command-line tool for rotating shared Azure account keys and
+updating supported configuration that stores them.
+
+## First rotation
+
+The simplest workflow starts with an existing dotenv file:
+
+```bash
+azurator login
+azurator rotate --env-file .env
+```
+
+Azurator matches the file values to supported Azure keys, displays every
+planned change, asks once for confirmation, rotates those keys, and updates the
+file plus supported Azure configuration that stores them.
+
+<Aside type="caution" title="Pre-alpha software">
+Rotation changes live Azure keys and cannot be rolled back. Review the displayed
+changes before confirming them.
+</Aside>
+
+## Start here
+
+1. [Install Azurator](./getting-started/installation/)
+2. [Sign in to Azure](./getting-started/authentication/)
+3. [Run your first rotation](./getting-started/first-rotation/)
+
+## Other workflows
+
+- [Rotate a SOPS file](./guides/rotate-sops-file/) without writing decrypted content to disk.
+- [Export selected keys](./guides/export-keys/) to a new plaintext or SOPS-encrypted dotenv file.
+- [Resume a rotation](./guides/resume-rotation/) after a failure or interruption.
+- [Choose keys interactively](./reference/cli/#plan-and-rotate) without providing a file.
+
+## Before choosing shared keys
+
+Shared keys are useful for prototypes and existing integrations, but they must
+be stored, distributed, and rotated. Prefer Microsoft Entra ID when the service
+and workload support it. Use Azurator when shared keys remain the practical
+choice.
+
+Microsoft provides guidance for
+[secretless authentication](https://learn.microsoft.com/en-us/entra/identity/managed-identities-azure-resources/secretless-authentication),
+[Foundry authentication](https://learn.microsoft.com/en-us/azure/foundry/concepts/authentication-authorization-foundry),
+and [Azure Storage Shared Key](https://learn.microsoft.com/en-us/azure/storage/common/shared-key-authorization-prevent).
+
+See [Supported Key Resources and Bindings](./reference/supported-keys-and-bindings/)
+for Azurator's exact current coverage.
