@@ -80,6 +80,7 @@ jobs:
             "azure-mgmt-core==1.6.0" \
             "azure-mgmt-storage==25.1.0" \
             "azure-mgmt-web==11.0.1" \
+            "openai==2.8.0" \
             "platformdirs==4.3.0" \
             "pydantic==2.12.0" \
             "rich==14.0.0" \

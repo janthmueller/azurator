@@ -744,7 +744,7 @@ def _render_plan_notes(console: Console, rotation_plan: RotationPlan) -> None:
             "No Azure-side configurations containing selected Storage keys were checked."
         ),
         "cognitive-services-bindings-not-inspected": (
-            "No Azure-side configurations containing selected AI account keys were checked."
+            "No Azure-side configurations containing selected Azure AI keys were checked."
         ),
     }
     notes: list[tuple[str, WarningImpact]] = []
@@ -982,7 +982,7 @@ def binding_scope_note(providers: set[str]) -> str | None:
     if has_ai:
         return (
             "Azure binding scope: public-cloud, project-level Foundry AzureOpenAI/ApiKey connections targeting "
-            "the selected Azure AI accounts. Other AI binding categories were not inspected. Running workloads "
+            "the selected Azure AI resources. Other AI binding categories were not inspected. Running workloads "
             "were not tested."
         )
     return None
@@ -1001,7 +1001,7 @@ def _render_match_notes(console: Console, report: MatchReport) -> None:
         if "azure-storage" in resource_providers:
             key_types.append("Storage Account key1/key2")
         if "azure-cognitive-services" in resource_providers:
-            key_types.append("Azure AI account Key1/Key2")
+            key_types.append("Azure AI Key1/Key2")
         if key_types:
             notes.append(
                 f"Key comparison scope: {' and '.join(key_types)}. Other Azure credential types were not checked."
@@ -1013,7 +1013,7 @@ def _render_match_notes(console: Console, report: MatchReport) -> None:
     if "storage-bindings-not-inspected" in warning_codes:
         notes.append("No Azure-side configurations containing matched Storage keys were checked.")
     if "cognitive-services-bindings-not-inspected" in warning_codes:
-        notes.append("No Azure-side configurations containing matched AI account keys were checked.")
+        notes.append("No Azure-side configurations containing matched Azure AI keys were checked.")
     if "foundry-binding-coverage-limited" in warning_codes:
         matched_ids = {match.resource_id for match in report.matches}
         matched_providers = {resource.provider for resource in report.resources if resource.resource_id in matched_ids}

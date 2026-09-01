@@ -132,7 +132,7 @@ from azurator.workflows import RotationPlanningWorkflow
 
 app = typer.Typer(
     name="azurator",
-    help="Find, export, plan, and safely rotate supported Azure account keys.",
+    help="Find, export, plan, and safely rotate shared-key credentials for Azure services.",
     no_args_is_help=True,
     pretty_exceptions_enable=False,
 )
@@ -177,7 +177,7 @@ def main(
         help="Show the installed version and exit.",
     ),
 ) -> None:
-    """Find and safely rotate selected Azure account keys."""
+    """Find and safely rotate shared-key credentials for Azure services."""
 
     del version
 
@@ -946,7 +946,7 @@ def export_keys(
         help="Accept the displayed export intent without prompting.",
     ),
 ) -> None:
-    """Write selected Azure account keys to one new plaintext or SOPS dotenv file."""
+    """Write selected Azure key slots to one new plaintext or SOPS dotenv file."""
 
     selector_values = tuple(selectors or ())
     if out is not None and sops_out is not None:

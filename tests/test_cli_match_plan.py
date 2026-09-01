@@ -137,7 +137,7 @@ def test_match_rejects_ambiguous_input_and_warns_for_broad_file_permissions(
 
 
 def test_match_help_does_not_infer_a_security_state() -> None:
-    result = CliRunner().invoke(app, ["match", "--help"])
+    result = CliRunner().invoke(app, ["match", "--help"], terminal_width=180)
 
     assert result.exit_code == 0
     assert "--stdin" in result.output

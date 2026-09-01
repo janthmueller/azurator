@@ -9,11 +9,11 @@ status: pre-alpha
 # Complete Azurator behavior
 
 Azurator is an unofficial, open-source tool for finding and safely rotating
-user-selected Azure account keys.
+shared-key credentials for Azure services.
 
 ## Product goal
 
-Azurator rotates explicitly selected, retrievable Azure account-key slots and
+Azurator rotates explicitly selected, retrievable Azure key slots and
 updates supported configuration that stores those values. A selection can come
 from exact Azure resource and slot identities or from matching supplied dotenv
 values.
@@ -345,7 +345,7 @@ sops decrypt secrets.enc.env | azurator plan --stdin --out plan.json
 ## Managed dotenv and export files
 
 The implemented export modes bootstrap a new private dotenv file from exact
-reviewed Azure account-key slots:
+reviewed Azure key slots:
 
 ```text
 azurator export --out selected-keys.env

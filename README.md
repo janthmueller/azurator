@@ -1,7 +1,7 @@
 # Azurator
 
-Azurator is a CLI for rotating shared Azure account keys and updating supported
-configuration that stores them.
+Azurator rotates shared-key credentials for Azure services and updates
+supported places where they are stored.
 
 > [!WARNING]
 > Azurator is pre-alpha. Key rotation changes Azure and cannot be rolled back.
@@ -56,10 +56,11 @@ azurator plan --env-file .env
 
 ## Current Scope
 
-Azurator rotates Storage Account and Azure AI, Cognitive Services, or Azure
-OpenAI account keys. When the same key is stored in a selected dotenv file, a
-supported Foundry project connection, or an App Service application setting,
-Azurator can update that configuration during the rotation.
+Azurator rotates Storage Account keys and the `Key1` and `Key2` credentials
+exposed by Azure AI, Cognitive Services, and Azure OpenAI. When the same key is
+stored in a selected dotenv file, a supported Foundry project connection, or an
+App Service application setting, Azurator can update that configuration during
+the rotation.
 
 Azurator checks only the documented configuration types. It does not discover
 every Azure secret or prove that a running workload uses a key.

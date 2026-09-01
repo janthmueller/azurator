@@ -227,7 +227,7 @@ def test_write_private_text_refuses_directory(tmp_path: Path) -> None:
 
 def test_read_private_text_reads_a_private_regular_file(tmp_path: Path) -> None:
     source = tmp_path / "plan.json"
-    source.write_text('{"schema_version":"1"}\n', encoding="utf-8")
+    source.write_bytes(b'{"schema_version":"1"}\n')
     source.chmod(0o600)
 
     assert read_private_text(source) == '{"schema_version":"1"}\n'
@@ -320,7 +320,7 @@ def test_read_private_text_enforces_size_limit(tmp_path: Path) -> None:
 def test_open_private_text_enforces_size_limit_if_file_grows_after_open(tmp_path: Path) -> None:
     source = tmp_path / "growing.env"
     original = "TOKEN=x\n"
-    source.write_text(original, encoding="utf-8")
+    source.write_bytes(original.encode("utf-8"))
     source.chmod(0o600)
 
     with open_private_text(source, max_bytes=len(original.encode("utf-8"))) as stream:

@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "azurator"
 version = "0.1.0-alpha.0"
-description = "Rotate shared Azure account keys and update supported configuration."
+description = "Rotate shared-key credentials for Azure services and update supported places where they are stored."
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.10"
@@ -17,6 +17,7 @@ dependencies = [
     "azure-mgmt-core>=1.6,<2",
     "azure-mgmt-storage>=25.1,<25.2",
     "azure-mgmt-web>=11.0.1,<11.1",
+    "openai>=2.8,<3",
     "platformdirs>=4.3,<5",
     "pydantic>=2.12,<3",
     "rich>=14,<15",

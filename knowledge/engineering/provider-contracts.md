@@ -41,6 +41,12 @@ retrieve candidates, regenerate a slot, or update a credential binding.
 | Foundry connection credential inspection | `azure-ai-projects>=2.3,<2.4` | Public-cloud data-plane API `v1` |
 | App Service application settings | `azure-mgmt-web>=11.0.1,<11.1` | Management API `2025-05-01` |
 
+The Foundry data-plane dependency additionally constrains
+`openai>=2.8,<3`. A clean pip resolution with OpenAI 3.x leaves the
+`azure-ai-projects` 2.3 SDK's direct `httpx` import unsatisfied, while the
+reviewed OpenAI 2.x line supplies that runtime dependency. Clean wheel and
+minimum-runtime-dependency CI jobs guard this compatibility boundary.
+
 The published Foundry data-plane `v1` credential union omits the Storage
 `AccountKey` discriminator even though the public-cloud service repeatably
 returns the exact `{type: "AccountKey", key: <value>}` mapping. Azurator accepts

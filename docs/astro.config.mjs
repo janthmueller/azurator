@@ -8,7 +8,7 @@ export default defineConfig({
   integrations: [
     starlight({
       title: 'Azurator',
-      description: 'Rotate shared Azure account keys and update supported configuration.',
+      description: 'Rotate shared-key credentials for Azure services and update supported places where they are stored.',
       disable404Route: true,
       customCss: ['./src/styles/custom.css'],
       social: [

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from pathlib import Path
 
 import pytest
 from pydantic import ValidationError
@@ -385,7 +386,7 @@ def test_managed_foundry_connection_steps_are_fully_automatic() -> None:
 
 
 def test_managed_dotenv_file_uses_the_same_bridge_contract_and_requires_plaintext_review() -> None:
-    source_path = "/private/config/secrets.env"
+    source_path = str((Path.cwd() / "private" / "config" / "secrets.env").resolve())
     match = KeyMatch(input_selector="STORAGE_KEY", resource_id=RESOURCE_ID, key_slot="key1")
     binding = CredentialBinding(
         binding_id=f"dotenv-file:{'a' * 64}",

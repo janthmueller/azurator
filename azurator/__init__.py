@@ -1,4 +1,4 @@
-"""Discover and safely rotate selected Azure account keys."""
+"""Discover and safely rotate shared-key credentials for Azure services."""
 
 from importlib.metadata import PackageNotFoundError, version
 

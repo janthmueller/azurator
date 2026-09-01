@@ -3,8 +3,8 @@ title: Supported Key Resources and Bindings
 description: Azure key resources and credential bindings Azurator supports.
 ---
 
-Azurator supports a defined set of Azure account keys and configuration that
-stores them. It does not scan every secret in a subscription.
+Azurator supports a defined set of shared-key credentials and configuration
+that stores them. It does not scan every secret in a subscription.
 
 Show the types supported by your installed version:
 
@@ -18,12 +18,12 @@ key resources in the selected subscription.
 
 ## Key resources
 
-A key resource is the Azure account that owns a supported key pair.
+A key resource is the Azure resource that owns a supported key pair.
 
 | Azure key resource | Slots | Discovery | Retrieval and rotation |
 | --- | --- | --- | --- |
 | Storage Account | `key1`, `key2` | Supported | Supported when Shared Key authentication is enabled. |
-| Azure AI, Cognitive Services, and Azure OpenAI account | `Key1`, `Key2` | Supported | Supported when local key authentication is enabled. |
+| Azure AI, Cognitive Services, or Azure OpenAI resource | `Key1`, `Key2` | Supported | Supported when local key authentication is enabled. |
 
 `discover` shows key authentication as `enabled` or `disabled`. Disabled key
 resources remain visible, but their slots are not offered for export, planning,
@@ -67,7 +67,7 @@ uses the key.
 ## Export
 
 `azurator export` can create one new private dotenv file containing selected
-retrievable Storage or Azure AI account key slots. `--out` creates plaintext.
+retrievable Storage or Azure AI key slots. `--out` creates plaintext.
 `--sops-out` encrypts and verifies the document through SOPS without writing
 plaintext to disk. Neither mode overwrites an existing file.
 

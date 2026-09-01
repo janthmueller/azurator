@@ -37,7 +37,7 @@ COGNITIVE_SERVICES_PROVIDER_INFO = ProviderInfo(
     contract_version=_PROVIDER_CONTRACT_VERSION,
     resource_types=(_RESOURCE_TYPE,),
 )
-_BINDING_WARNING = "Metadata-only discovery did not inspect credential bindings containing these AI account keys."
+_BINDING_WARNING = "Metadata-only discovery did not inspect credential bindings containing these Azure AI keys."
 _PERMISSION_WARNING = (
     "This read-only command did not call key retrieval or regeneration APIs, so it did not test whether your account "
     "has permission to use them."

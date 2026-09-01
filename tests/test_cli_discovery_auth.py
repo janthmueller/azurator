@@ -211,7 +211,11 @@ def test_discover_table_collapses_equivalent_provider_limitations(monkeypatch: p
 
     monkeypatch.setattr(cli_module, "_discover_inventory", discover_fake)
 
-    result = CliRunner().invoke(app, ["discover", "--subscription", SUBSCRIPTION_ID])
+    result = CliRunner().invoke(
+        app,
+        ["discover", "--subscription", SUBSCRIPTION_ID],
+        terminal_width=180,
+    )
 
     assert result.exit_code == 0
     assert result.stdout.count("Credential bindings and key-operation permissions are not checked by discover") == 1
