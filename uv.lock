@@ -45,7 +45,7 @@ wheels = [
 
 [[package]]
 name = "azurator"
-version = "0.1.0a0"
+version = "0.1.0a1"
 source = { editable = "." }
 dependencies = [
     { name = "azure-ai-projects" },
