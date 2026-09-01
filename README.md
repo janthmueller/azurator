@@ -1,5 +1,9 @@
 # Azurator
 
+[![PyPI Latest Release](https://img.shields.io/pypi/v/azurator.svg)](https://pypi.org/project/azurator/)
+[![Pepy Total Downloads](https://img.shields.io/pepy/dt/azurator)](https://pepy.tech/project/azurator)
+[![GitHub License](https://img.shields.io/github/license/janthmueller/azurator)](https://github.com/janthmueller/azurator/blob/main/LICENSE)
+
 Azurator rotates shared-key credentials for Azure services and updates
 supported places where they are stored.
 
