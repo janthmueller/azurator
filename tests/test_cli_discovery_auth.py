@@ -10,6 +10,7 @@ import pytest
 import typer
 from azure.core.exceptions import ClientAuthenticationError, HttpResponseError
 from azure.identity import AuthenticationRequiredError, CredentialUnavailableError
+from click import unstyle
 from typer.testing import CliRunner
 
 import azurator.cli as cli_module
@@ -38,14 +39,15 @@ from tests.cli_test_support import (
 
 def test_root_help_exposes_concise_output_controls() -> None:
     result = CliRunner().invoke(app, ["--help"])
+    output = unstyle(result.output)
 
     assert result.exit_code == 0
-    assert "Rotate shared keys for Azure services" in result.output
-    assert "--verbose" in result.output
-    assert "-v" in result.output
-    assert "Show inspection details" in result.output
-    assert "warning metadata" in result.output
-    assert "--quiet" not in result.output
+    assert "Rotate shared keys for Azure services" in output
+    assert "--verbose" in output
+    assert "-v" in output
+    assert "Show inspection details" in output
+    assert "warning metadata" in output
+    assert "--quiet" not in output
 
 
 def test_discover_rejects_invalid_subscription_override() -> None:

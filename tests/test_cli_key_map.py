@@ -9,6 +9,7 @@ from collections.abc import Sequence
 from pathlib import Path
 
 import pytest
+from click import unstyle
 from typer.testing import CliRunner
 
 import azurator.cli as cli_module
@@ -104,9 +105,10 @@ def _resolve_default_subscription(_value: str | None) -> SubscriptionSelection:
 
 def test_export_help_exposes_key_map_as_a_selection_mode() -> None:
     result = CliRunner().invoke(app, ["export", "--help"])
+    output = unstyle(result.output)
 
     assert result.exit_code == 0
-    assert "--key-map" in result.output
+    assert "--key-map" in output
 
 
 def test_match_writes_minimal_private_key_map_from_confirmed_matches(
