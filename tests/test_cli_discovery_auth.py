@@ -10,7 +10,7 @@ import pytest
 import typer
 from azure.core.exceptions import ClientAuthenticationError, HttpResponseError
 from azure.identity import AuthenticationRequiredError, CredentialUnavailableError
-from click import unstyle
+from rich.text import Text
 from typer.testing import CliRunner
 
 import azurator.cli as cli_module
@@ -39,7 +39,7 @@ from tests.cli_test_support import (
 
 def test_root_help_exposes_concise_output_controls() -> None:
     result = CliRunner().invoke(app, ["--help"])
-    output = unstyle(result.output)
+    output = Text.from_ansi(result.output).plain
 
     assert result.exit_code == 0
     assert "Rotate shared keys for Azure services" in output
