@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v0.1.0-alpha.3 (2026-09-02)
+
+### Features
+
+- Add key-map refresh for dotenv files
+  ([`5c2fa02`](https://github.com/janthmueller/azurator/commit/5c2fa0204522e1ebd6b98df492d162d82176459e))
+
+
 ## v0.1.0-alpha.2 (2026-09-02)
 
 ### Documentation

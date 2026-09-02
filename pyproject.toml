@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "azurator"
-version = "0.1.0-alpha.2"
+version = "0.1.0-alpha.3"
 description = "Rotate shared-key credentials for Azure services and update supported places where they are stored."
 readme = "README.md"
 license = "MIT"
