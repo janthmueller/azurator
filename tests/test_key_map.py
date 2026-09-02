@@ -288,6 +288,7 @@ def test_key_map_export_resolution_preserves_aliases_and_exact_slots() -> None:
         "SECONDARY_KEY",
     ]
     assert [assignment.key_slot for assignment in assignments] == ["key1", "key1", "key2"]
+    assert [assignment.resource_group for assignment in assignments] == ["rg", "rg", "rg"]
     assert all(assignment.resource == resource for assignment in assignments)
 
 
@@ -302,6 +303,19 @@ def test_key_map_export_resolution_does_not_add_an_unmapped_sibling_slot() -> No
     assignments = build_key_map_export_assignments(inventory, key_map)
 
     assert [(assignment.selector, assignment.key_slot) for assignment in assignments] == [("ONLY_PRIMARY", "key1")]
+
+
+def test_key_map_export_resolution_rejects_inconsistent_discovered_resource_identity() -> None:
+    inventory = make_inventory()
+    resource = inventory.resources[0]
+    key_map = KeyMap(
+        subscription_id=SUBSCRIPTION_ID,
+        mappings=(KeyMapEntry(selector="PRIMARY_KEY", key_resource_id=resource.resource_id, key_slot="key1"),),
+    )
+    inconsistent = inventory.model_copy(update={"resources": (resource.model_copy(update={"name": "different-name"}),)})
+
+    with pytest.raises(ExportError, match="resource identity contract"):
+        build_key_map_export_assignments(inconsistent, key_map)
 
 
 def test_key_map_export_resolution_fails_closed_on_scope_resource_and_slot_drift() -> None:

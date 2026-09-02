@@ -4,5 +4,5 @@
   controls, failure behavior, accepted limitations, and review gates.
 
 Read the complete threat model before changing secret input, matching,
-fingerprinting, export, managed files, plans, operations, provider behavior, or
-Azure mutation.
+fingerprinting, export, refresh, managed files, plans, operations, provider
+behavior, or Azure mutation.

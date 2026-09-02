@@ -131,6 +131,7 @@ def test_export_all_creates_one_private_file_without_printing_values(
     assert service.calls[0][0] == SUBSCRIPTION_ID
     assert [assignment.key_slot for assignment in service.calls[0][1]] == ["key1", "key2"]
     assert "Plaintext dotenv export · 2 key slots" in result.output
+    assert "rg / account-a" in " ".join(result.output.split())
     assert f"Subscription {SUBSCRIPTION_NAME} ({SUBSCRIPTION_ID})" in result.output
     assert str(destination.resolve()) in result.output
     assert "Exported 2 Azure key slots" in result.output

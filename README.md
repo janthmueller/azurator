@@ -58,6 +58,8 @@ azurator plan --env-file .env
 - `azurator export --out azure-keys.env` creates a new dotenv file from selected keys.
 - `azurator match --sops-file secrets.enc.env --key-map-out azurator.keys.json`
   saves mappings for `azurator export --key-map azurator.keys.json --sops-out recreated.enc.env`.
+- `azurator refresh --key-map azurator.keys.json --sops-file secrets.enc.env`
+  updates the mapped existing assignments with their current Azure values.
 - `azurator discover` lists supported key resources without retrieving key values.
 
 ## Current Scope

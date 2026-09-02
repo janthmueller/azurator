@@ -17,6 +17,7 @@ available in your installed version.
 | `azurator discover` | List supported key resources without retrieving key values. |
 | `azurator match` | Find supported Azure key slots equal to supplied dotenv values. |
 | `azurator export` | Create a new plaintext or SOPS-encrypted dotenv file from selected slots or a key map. |
+| `azurator refresh` | Replace mapped values in one existing plaintext or SOPS dotenv file with current Azure values. |
 | `azurator plan` | Preview a rotation without changing Azure or a file. |
 | `azurator rotate` | Build and execute a plan, execute a saved plan, or resume an operation. |
 | `azurator operation list` | List retained local recovery operations. |
@@ -125,15 +126,15 @@ IDs, ARM resource IDs, endpoints, configuration relationships, selector names,
 and local file paths, so review it before storing or sharing it.
 
 `match --key-map-out azurator.keys.json` instead writes only confirmed
-selector-to-resource-and-slot mappings. Use that artifact with
-`export --key-map azurator.keys.json`. A key map contains no values or local
-source path, but its Azure resource IDs and selector names remain infrastructure
-metadata.
+selector-to-resource-and-slot mappings. Use that artifact with `export` to
+create a file or with `refresh` to update mapped values in an existing file. A
+key map contains no values or local source path, but its Azure resource IDs and
+selector names remain infrastructure metadata.
 
 Contract IDs and versions in `list --json` describe Azurator's installed
 provider behavior. They are not Azure REST API or SDK versions.
 
-## Export and recovery
+## Export, refresh, and recovery
 
 Export requires exactly one new destination:
 
@@ -143,7 +144,15 @@ azurator export --sops-out keys.enc.env
 azurator export --key-map azurator.keys.json --sops-out mapped-keys.enc.env
 ```
 
-See [Export Keys](../../guides/export-keys/) for selection and file guarantees.
+Refresh an existing file without rotating Azure keys:
+
+```bash
+azurator refresh --key-map azurator.keys.json --env-file keys.env
+azurator refresh --key-map azurator.keys.json --sops-file keys.enc.env
+```
+
+See [Export and Refresh Keys](../../guides/export-keys/) for selection and file
+guarantees.
 
 After an interrupted rotation, use:
 

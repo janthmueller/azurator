@@ -33,7 +33,7 @@ export default defineConfig({
           items: [
             { label: 'Rotate a dotenv File', link: '/guides/rotate-dotenv-file/' },
             { label: 'Rotate a SOPS File', link: '/guides/rotate-sops-file/' },
-            { label: 'Export Keys', link: '/guides/export-keys/' },
+            { label: 'Export and Refresh Keys', link: '/guides/export-keys/' },
             { label: 'Resume a Rotation', link: '/guides/resume-rotation/' },
           ],
         },

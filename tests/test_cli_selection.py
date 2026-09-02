@@ -175,7 +175,7 @@ def test_scriptable_plan_rejects_unknown_resource_before_candidate_inspection(
 ) -> None:
     inspected = patch_direct_plan_boundary(monkeypatch)
     monkeypatch.setattr(cli_module, "_interactive_terminal_available", lambda: False)
-    unknown = _resource_id().replace("/storageAccounts/a", "/storageAccounts/must-not-render")
+    unknown = _resource_id().replace("/storageAccounts/account-a", "/storageAccounts/must-not-render")
 
     result = CliRunner().invoke(app, ["plan", "--select", f"{unknown}#key1"])
 

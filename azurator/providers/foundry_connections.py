@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import re
-import secrets
 from collections.abc import Mapping, MutableMapping, Sequence
 from enum import Enum
 from typing import cast
@@ -25,6 +24,7 @@ from azurator.clients import (
     FoundryConnectionOperations,
     FoundryProjectLike,
 )
+from azurator.fingerprints import secret_values_equal
 from azurator.models import (
     BindingInspection,
     BindingInspectionStatus,
@@ -397,9 +397,9 @@ class FoundryConnectionsProvider:
                     "foundry-transition-contract-invalid",
                     "Foundry returned credentials outside the supported connection transition contract.",
                 )
-            if secrets.compare_digest(raw_key, replacement_key):
+            if secret_values_equal(raw_key, replacement_key):
                 return _BindingTransitionState.replacement
-            if secrets.compare_digest(raw_key, expected_key):
+            if secret_values_equal(raw_key, expected_key):
                 return _BindingTransitionState.expected
             raise ProviderOperationError(
                 "foundry-connection-drift-detected",
@@ -474,7 +474,7 @@ class FoundryConnectionsProvider:
                     "foundry-verification-contract-invalid",
                     "Foundry returned credentials outside the supported connection verification contract.",
                 )
-            if not secrets.compare_digest(raw_key, expected_key):
+            if not secret_values_equal(raw_key, expected_key):
                 raise ProviderOperationError(
                     BINDING_VERIFICATION_MISMATCH_CODE,
                     "The Foundry connection did not retain the expected Azure key.",

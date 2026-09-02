@@ -140,7 +140,7 @@ class SupportedKeyResource(AzuratorModel):
     name: str = Field(min_length=1)
     resource_type: str = Field(min_length=1)
     key_slots: tuple[str, ...] = Field(min_length=1)
-    operations: tuple[Literal["discover", "match", "export", "rotate"], ...] = Field(min_length=1)
+    operations: tuple[Literal["discover", "match", "export", "refresh", "rotate"], ...] = Field(min_length=1)
     contract_id: str = Field(min_length=1)
     contract_version: str = Field(min_length=1)
 

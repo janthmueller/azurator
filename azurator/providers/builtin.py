@@ -37,7 +37,7 @@ from azurator.providers.foundry_connections import FOUNDRY_CONNECTIONS_PROVIDER_
 from azurator.providers.sops_dotenv_file import SOPS_DOTENV_FILE_PROVIDER_INFO, SopsDotenvFileProvider
 from azurator.providers.storage import STORAGE_KEY_SLOTS, STORAGE_PROVIDER_INFO, StorageProvider
 
-_KEY_RESOURCE_OPERATIONS = ("discover", "match", "export", "rotate")
+_KEY_RESOURCE_OPERATIONS = ("discover", "match", "export", "refresh", "rotate")
 _BINDING_OPERATIONS = ("inspect", "update", "verify")
 
 

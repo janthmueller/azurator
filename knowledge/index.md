@@ -22,7 +22,7 @@ This bundle follows the [Open Knowledge Format v0.2](https://github.com/GoogleCl
 # Reading policy
 
 Read only the concepts relevant to the task. Before changing product behavior,
-secret handling, plans, operations, provider contracts, export, or rotation,
+secret handling, plans, operations, provider contracts, export, refresh, or rotation,
 read the complete [product behavior](product/behavior.md) and
 [threat model](security/threat-model.md). The running CLI and tests are
 authoritative for implemented behavior. This bundle explains the durable

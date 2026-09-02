@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import re
-import secrets
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from io import StringIO
 from typing import TextIO
+
+from azurator.fingerprints import secret_values_equal
 
 _SELECTOR_PATTERN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 _MAX_LINE_LENGTH = 65_536
@@ -87,8 +88,15 @@ def consume_dotenv(stream: TextIO, consume: SecretSink) -> DotenvReadResult:
 def replace_dotenv_values(content: str, selectors: tuple[str, ...], value: str) -> str:
     """Replace exact assignments in the strict dotenv subset without interpreting the document."""
 
+    return replace_dotenv_assignments(content, {selector: value for selector in selectors})
+
+
+def replace_dotenv_assignments(content: str, replacements: Mapping[str, str]) -> str:
+    """Replace exact assignments with selector-specific values in one strict parse."""
+
+    selectors = tuple(replacements)
     selected = _validate_selected_selectors(selectors)
-    encoded = _encode_dotenv_value(value)
+    encoded = {selector: _encode_dotenv_value(replacements[selector]) for selector in selectors}
     output: list[str] = []
     found: set[str] = set()
     seen: set[str] = set()
@@ -124,7 +132,7 @@ def replace_dotenv_values(content: str, selectors: tuple[str, ...], value: str) 
             output.append(raw_line)
             continue
         found.add(parsed.selector)
-        output.append(f"{line[: parsed.value_start]}{encoded}{newline}")
+        output.append(f"{line[: parsed.value_start]}{encoded[parsed.selector]}{newline}")
 
     missing = selected - found
     if missing:
@@ -169,7 +177,7 @@ def dotenv_stream_values_equal(stream: TextIO, selectors: tuple[str, ...], expec
     matched: set[str] = set()
 
     def compare(selector: str, value: str) -> None:
-        if selector in selected and secrets.compare_digest(value, expected):
+        if selector in selected and secret_values_equal(value, expected):
             matched.add(selector)
 
     result = consume_dotenv(stream, compare)

@@ -1,6 +1,6 @@
 ---
-title: Export Keys
-description: Create a new plaintext or SOPS-encrypted dotenv file from selected Azure key slots.
+title: Export and Refresh Keys
+description: Create a dotenv file or refresh mapped values in an existing one.
 ---
 
 import { Aside } from '@astrojs/starlight/components';
@@ -90,6 +90,28 @@ A key map can be shared when its subscription ID, resource IDs, and selector
 names are acceptable infrastructure metadata for that repository. It cannot
 reconstruct unrelated values from the original dotenv file.
 
+## Refresh an existing file
+
+Use the same key map to replace mapped values in an existing file without
+rotating anything:
+
+```bash
+azurator refresh --key-map azurator.keys.json --sops-file secrets.enc.env
+azurator refresh --key-map azurator.keys.json --env-file secrets.env
+```
+
+Refresh is one-way from Azure into the file. Every selector in the map must
+already exist. Azurator updates stale mapped values, leaves already current
+values alone, and preserves assignment values not listed in the map. Plaintext
+refresh also preserves comments, ordering, and line endings. If a mapped
+selector is missing, the complete refresh stops without adding it or changing
+the file.
+
+SOPS refresh updates one encrypted temporary and verifies mapped and unmapped
+assignments before replacing the original once. It preserves the existing SOPS
+recipients while SOPS controls ciphertext formatting. Plaintext and SOPS
+refresh both ask once for confirmation unless `-y` is used.
+
 ## Destination guarantees
 
 Export creates one new mode-`0600` file on POSIX systems and never prints key
@@ -103,8 +125,8 @@ picker.
 Use `-y` to skip the confirmation after the complete valid export intent is
 displayed. It does not bypass selection or destination checks.
 
-An exported file can be matched or rotated later with its corresponding input
-option:
+An exported file can be matched, refreshed through a key map, or rotated later
+with its corresponding input option:
 
 ```bash
 azurator match --env-file azure-keys.env

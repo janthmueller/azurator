@@ -19,6 +19,7 @@ from azurator.inputs import (
 )
 from azurator.models import DiscoveredResource, Inventory, KeyAuthentication, KeyMap, KeySlotSelection
 from azurator.providers.base import KeyReadingProvider
+from azurator.providers.resource_ids import ResourceIdError, resource_coordinates
 from azurator.sops import MAX_SOPS_DOTENV_FILE_BYTES, SopsExportCommand
 
 _SELECTOR_PART_PATTERN = re.compile(r"[^A-Za-z0-9]+")
@@ -33,6 +34,7 @@ class DotenvExportAssignment:
     """One secret-free mapping from an Azure key slot to a dotenv selector."""
 
     resource: DiscoveredResource
+    resource_group: str
     key_slot: str
     selector: str
 
@@ -83,6 +85,7 @@ def build_dotenv_export_assignments(
         assignments.append(
             DotenvExportAssignment(
                 resource=resource,
+                resource_group=_validated_resource_group(inventory.subscription_id, resource),
                 key_slot=selection.key_slot,
                 selector=selector,
             )
@@ -132,11 +135,29 @@ def build_key_map_export_assignments(
         assignments.append(
             DotenvExportAssignment(
                 resource=resource,
+                resource_group=_validated_resource_group(inventory.subscription_id, resource),
                 key_slot=mapping.key_slot,
                 selector=mapping.selector,
             )
         )
     return tuple(assignments)
+
+
+def _validated_resource_group(subscription_id: str, resource: DiscoveredResource) -> str:
+    """Resolve one exact display identity while assignments are still being validated."""
+
+    try:
+        coordinates = resource_coordinates(
+            resource.resource_id,
+            subscription_id=subscription_id,
+            expected_resource_type=resource.resource_type,
+            expected_name=resource.name,
+        )
+    except ResourceIdError:
+        raise ExportError(
+            "a selected key resource does not satisfy the supported Azure resource identity contract"
+        ) from None
+    return coordinates.resource_group
 
 
 class DotenvExportService:

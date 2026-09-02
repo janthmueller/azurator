@@ -141,7 +141,7 @@ def test_foundry_update_is_a_noop_when_the_replacement_is_already_present() -> N
 
 
 def test_foundry_update_blocks_a_third_credential_without_overwriting_it() -> None:
-    third = "third-storage-secret"
+    third = "dritter-storage-schlüssel"
     update_operations = FakeProjectConnectionOperations()
     data_operations = _managed_connection_operations(key=third)
     provider, management_client, project_client, _ = make_provider(
@@ -300,7 +300,7 @@ def test_foundry_verification_rejects_noncanonical_credentials_without_reclassif
 
 
 def test_foundry_verification_mismatch_is_secret_free_and_fails_closed() -> None:
-    stored_secret = "stored-storage-secret"
+    stored_secret = "gespeicherter-storage-schlüssel"
     expected_secret = "expected-storage-secret"
     detailed_credentials = FakeCredentials(stored_secret)
     detailed = FakeConnection(

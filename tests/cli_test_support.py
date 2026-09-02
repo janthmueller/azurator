@@ -76,7 +76,10 @@ def make_inventory(subscription_id: str = SUBSCRIPTION_ID) -> Inventory:
         ),
         resources=(
             DiscoveredResource(
-                resource_id=f"/subscriptions/{subscription_id}/resourceGroups/rg/providers/Microsoft.Storage/storageAccounts/a",
+                resource_id=(
+                    f"/subscriptions/{subscription_id}/resourceGroups/rg/providers/"
+                    "Microsoft.Storage/storageAccounts/account-a"
+                ),
                 name="account-a",
                 resource_type="Microsoft.Storage/storageAccounts",
                 location="westeurope",

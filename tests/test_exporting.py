@@ -136,6 +136,7 @@ def test_export_assignments_use_deterministic_secret_free_selector_names() -> No
         "AZURATOR_AZURE_COGNITIVE_SERVICES_OPENAI_ONE_KEY2",
     ]
     assert assignments[0].resource == storage
+    assert [assignment.resource_group for assignment in assignments] == ["rg", "rg"]
     assert assignments[1].key_slot == "Key2"
 
 
@@ -223,9 +224,9 @@ def test_export_renders_multiple_aliases_from_one_key_slot_with_one_resource_rea
         {storage.resource_id: (("key1", "storage-secret-one"), ("key2", "storage-secret-two"))},
     )
     assignments = (
-        DotenvExportAssignment(storage, "key1", "PRIMARY_KEY"),
-        DotenvExportAssignment(storage, "key1", "PRIMARY_ALIAS"),
-        DotenvExportAssignment(storage, "key2", "SECONDARY_KEY"),
+        DotenvExportAssignment(storage, "rg", "key1", "PRIMARY_KEY"),
+        DotenvExportAssignment(storage, "rg", "key1", "PRIMARY_ALIAS"),
+        DotenvExportAssignment(storage, "rg", "key2", "SECONDARY_KEY"),
     )
 
     payload = DotenvExportService((provider,)).render(SUBSCRIPTION_ID, assignments)
@@ -268,6 +269,22 @@ def test_export_rejects_duplicate_selection_before_key_retrieval() -> None:
 
     with pytest.raises(ExportError):
         build_dotenv_export_assignments(_inventory(storage), (selection, selection))
+
+
+def test_export_rejects_inconsistent_resource_identity_during_assignment_resolution() -> None:
+    storage = _resource(
+        "storage-one",
+        STORAGE_PROVIDER,
+        "Microsoft.Storage/storageAccounts",
+        ("key1", "key2"),
+    )
+    inconsistent = storage.model_copy(update={"name": "different-name"})
+
+    with pytest.raises(ExportError, match="resource identity contract"):
+        build_dotenv_export_assignments(
+            _inventory(inconsistent),
+            (KeySlotSelection(resource_id=storage.resource_id, key_slot="key1"),),
+        )
 
 
 def test_export_rejects_missing_provider_without_reading_any_registered_provider() -> None:
@@ -318,8 +335,8 @@ def test_export_validates_every_assignment_before_retrieving_any_key() -> None:
         },
     )
     assignments = (
-        DotenvExportAssignment(first, "key1", "FIRST_KEY"),
-        DotenvExportAssignment(invalid, "key1", "SECOND_KEY"),
+        DotenvExportAssignment(first, "rg", "key1", "FIRST_KEY"),
+        DotenvExportAssignment(invalid, "rg", "key1", "SECOND_KEY"),
     )
 
     with pytest.raises(ExportError, match="retrievable key-pair contract"):
@@ -339,7 +356,7 @@ def test_export_rejects_an_invalid_selector_before_retrieving_keys() -> None:
         STORAGE_PROVIDER,
         {storage.resource_id: (("key1", "first-secret"), ("key2", "second-secret"))},
     )
-    assignments = (DotenvExportAssignment(storage, "key1", "INVALID-NAME"),)
+    assignments = (DotenvExportAssignment(storage, "rg", "key1", "INVALID-NAME"),)
 
     with pytest.raises(ExportError, match="selector"):
         DotenvExportService((provider,)).render(SUBSCRIPTION_ID, assignments)
@@ -397,6 +414,7 @@ def test_export_rejects_a_key_outside_the_canonical_dotenv_output_shape() -> Non
     assignments = (
         DotenvExportAssignment(
             resource=storage,
+            resource_group="rg",
             key_slot="key1",
             selector="STORAGE_KEY",
         ),
@@ -420,7 +438,7 @@ def test_export_rejects_non_utf8_key_text_without_exposing_it() -> None:
         STORAGE_PROVIDER,
         {storage.resource_id: (("key1", invalid_value), ("key2", "second-secret"))},
     )
-    assignments = (DotenvExportAssignment(storage, "key1", "STORAGE_KEY"),)
+    assignments = (DotenvExportAssignment(storage, "rg", "key1", "STORAGE_KEY"),)
 
     with pytest.raises(ExportError, match="cannot be represented") as caught:
         DotenvExportService((provider,)).render(SUBSCRIPTION_ID, assignments)

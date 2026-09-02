@@ -11,6 +11,7 @@ from azurator.inputs import (
     consume_dotenv,
     dotenv_values_equal,
     render_dotenv_assignment,
+    replace_dotenv_assignments,
     replace_dotenv_values,
 )
 
@@ -101,6 +102,20 @@ def test_dotenv_replacement_preserves_each_original_line_ending() -> None:
     assert dotenv_values_equal(replaced, ("FIRST_KEY", "SECOND_KEY"), "new-azure-key")
 
 
+def test_dotenv_assignment_replacement_uses_distinct_values_and_preserves_unselected_content() -> None:
+    content = "# keep\r\nFIRST=old-one\r\nUNRELATED='leave-me'\nSECOND=old-two\n"
+
+    replaced = replace_dotenv_assignments(
+        content,
+        {
+            "FIRST": "new-one",
+            "SECOND": "new-two",
+        },
+    )
+
+    assert replaced == "# keep\r\nFIRST='new-one'\r\nUNRELATED='leave-me'\nSECOND='new-two'\n"
+
+
 def test_dotenv_assignment_renderer_uses_the_canonical_file_shape() -> None:
     assert render_dotenv_assignment("AZURE_STORAGE_KEY", "new-azure-key") == ("AZURE_STORAGE_KEY='new-azure-key'")
 
@@ -114,6 +129,18 @@ def test_dotenv_replacement_rejects_missing_selectors_without_exposing_values() 
 
     assert "old-secret" not in str(raised.value)
     assert replacement not in str(raised.value)
+
+
+def test_dotenv_assignment_replacement_rejects_one_missing_selector_without_partial_output() -> None:
+    with pytest.raises(SecretInputError, match="SECOND") as raised:
+        replace_dotenv_assignments(
+            "FIRST=old-secret\n",
+            {"FIRST": "first-replacement", "SECOND": "second-replacement"},
+        )
+
+    assert "old-secret" not in str(raised.value)
+    assert "first-replacement" not in str(raised.value)
+    assert "second-replacement" not in str(raised.value)
 
 
 @pytest.mark.parametrize("value", ("contains'quote", "contains\nnewline", ""))

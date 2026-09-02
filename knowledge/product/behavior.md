@@ -1,7 +1,7 @@
 ---
 type: Product Semantics
 title: Complete Azurator behavior
-description: Detailed implemented CLI, key-resource, binding, planning, export, rotation, and recovery semantics.
+description: Detailed implemented CLI, key-resource, binding, export, refresh, rotation, and recovery semantics.
 tags: [product, cli, azure, rotation]
 status: pre-alpha
 ---
@@ -23,7 +23,7 @@ The core workflow is:
 1. Stay within one explicitly selected Azure subscription.
 2. Discover supported key resources without retrieving key values.
 3. Retrieve keys only through reviewed providers when matching, exporting,
-   planning, or rotation requires them.
+   refreshing, planning, or rotation requires them.
 4. Build one complete read-only plan and never require a hand-written plan.
 5. Display and confirm that plan before mutation.
 6. Update and verify supported stored copies while rotating each selected slot.
@@ -43,7 +43,7 @@ The standalone command is `azurator`. Business logic remains independent of
 
 Metadata discovery includes reviewed resources whose key authentication is
 disabled. Those resources remain visible but never enter key retrieval, export,
-planning, or rotation.
+refresh, planning, or rotation.
 
 ### Credential bindings
 
@@ -61,6 +61,11 @@ Export can exclusively create one new plaintext or SOPS-encrypted dotenv file
 from selected retrievable slots. A secret-free key map can preserve confirmed
 dotenv selector-to-resource-and-slot mappings and drive a later export. Export
 does not merge or replace a file.
+
+Refresh uses one strict key map to replace only its existing selectors in one
+explicit plaintext or SOPS-encrypted dotenv file with the current Azure values.
+It never adds missing selectors, changes unmapped assignments, rotates an Azure
+key, or creates a plan or recovery operation.
 
 Use three distinct domain terms throughout the implementation:
 
@@ -148,7 +153,8 @@ authorization and execution boundary and are not flattened into one public list.
 `export` crosses the key-retrieval boundary without mutating Azure. It first
 performs metadata-only discovery, then uses a terminal picker, repeatable exact
 `--select`, explicit `--all`, or one strict key map to produce a complete
-secret-free resource/slot/selector intent. A key map must match the already
+secret-free resource/slot/selector intent. The displayed intent identifies each
+key resource by resource group and name. A key map must match the already
 selected subscription and is mutually exclusive with the other selection
 modes. Its exact selectors, resources, and slots are resolved against the
 current inventory; repeated resource/slot identities intentionally preserve
@@ -167,6 +173,36 @@ assignment map through fresh HMAC fingerprints before exclusively creating the
 mode-`0600` ciphertext destination. It never prints values, writes SOPS
 plaintext to disk, replaces an existing path, or writes a plan or recovery
 operation.
+
+### Refresh
+
+`refresh` performs one-way reconciliation from current Azure key values into
+one existing local dotenv credential binding. It requires one strict
+`--key-map` and exactly one of `--env-file` or `--sops-file`. The map must match
+the already selected subscription, and every mapped resource and exact slot is
+resolved against fresh metadata before key retrieval. Every mapped selector
+must already exist in the target. A missing selector, duplicate assignment,
+invalid document, unavailable resource, disabled key authentication, unknown
+slot, or subscription mismatch fails without adding or changing anything.
+
+Azurator displays the complete secret-free selector, resource, slot, and file
+intent, identifying each key resource by resource group and name, and asks once
+for confirmation unless `-y` is supplied. Only after confirmation do installed
+reviewed key-reading providers read each mapped resource's exact two-slot state
+once. Mapped aliases are retained, already current assignments are not
+rewritten, and unmapped assignment values remain unchanged. Plaintext mode also
+preserves comments, ordering, and line endings.
+
+Plaintext refresh builds and verifies one complete replacement in memory, then
+atomically replaces the still-identical current-user-owned source while
+preserving its POSIX mode, owner, and group. SOPS refresh modifies one private
+encrypted temporary through the reviewed `sops set --value-stdin` contract,
+decrypts it in memory, verifies every mapped value and every unmapped assignment
+through fresh HMAC fingerprints, rechecks the source snapshot, and atomically
+replaces it once. It preserves existing SOPS recipient configuration rather
+than applying creation rules again. SOPS owns ciphertext formatting. Neither
+mode writes a plaintext temporary, prints key values,
+updates Azure bindings, creates a plan, or creates recovery state.
 
 ### Matching
 
@@ -390,6 +426,7 @@ azurator export --select '<arm-resource-id>#key1' --out selected-keys.env
 azurator export --all --sops-out selected-keys.enc.env
 azurator match --sops-file existing.enc.env --key-map-out azurator.keys.json
 azurator export --key-map azurator.keys.json --sops-out recreated.enc.env
+azurator refresh --key-map azurator.keys.json --sops-file existing.enc.env
 ```
 
 Without `--select`, `--all`, or `--key-map`, a controlling-terminal picker lists
@@ -432,6 +469,13 @@ retrievable-key contract before confirmation or key retrieval. Export retrieves
 each mapped resource once and renders the mappings in artifact order. It neither
 adds sibling slots nor reconstructs unmatched or unrelated dotenv assignments.
 
+The same artifact can drive `refresh` for an existing plaintext or encrypted
+dotenv file. Refresh requires every mapped selector to exist and updates only
+those values. Selectors present only in the target remain untouched. Selectors
+present only in the map block the command. This strict distinction keeps
+`export` as exclusive creation and avoids treating a misspelled destination or
+incomplete file as successful synchronization.
+
 The implemented plaintext mode uses one existing dotenv file as both matching
 source and managed configuration record:
 
@@ -470,10 +514,10 @@ writers, so the file must not be edited or redeployed concurrently with rotation
 
 This mode deliberately stores keys as plaintext. It is not a fallback from
 SOPS, and the warning requires plan review. The separate implemented
-`--sops-file` mode manages encrypted dotenv in place through the contract above.
-SOPS YAML/JSON, export merge or overwrite, and recipient management remain
-outside the current scope. Streamed stdin input has no path and therefore
-cannot be rewritten.
+`--sops-file` mode manages encrypted dotenv in place through the contracts
+above. SOPS YAML/JSON, export merge or overwrite, adding missing assignments
+during refresh, and recipient management remain outside the current scope.
+Streamed stdin input has no path and therefore cannot be rewritten.
 
 ## Engineering boundary
 
@@ -552,9 +596,9 @@ enabled binding inspection is `blocked`, not a successful empty plan: Azurator
 cannot safely account for uninspected slots or bindings.
 
 `-y`/`--yes` accepts executable warnings and the rotation confirmation or the
-fully displayed plaintext or SOPS export intent. It must never bypass a block, plan
-validation, scope, drift, permissions, provider contracts, export selection or
-destination validation, or secret-handling rules. The reviewed
+fully displayed export or refresh intent. It must never bypass a block, plan
+validation, scope, drift, permissions, provider contracts, export or refresh
+validation, or secret-handling rules. The reviewed
 Storage/Cognitive/Foundry/App-Service/plaintext-dotenv/SOPS-dotenv slice updates and verifies
 configuration records before continuing; it does not reload or run a workload
 health check.

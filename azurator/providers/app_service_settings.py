@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import secrets
 from collections.abc import Sequence
 from enum import Enum
 from typing import cast
@@ -13,6 +12,7 @@ from azure.core.exceptions import HttpResponseError, ServiceRequestError, Servic
 from azure.mgmt.web.models import StringDictionary
 
 from azurator.clients import AppSettingsLike, AzureClientFactory, WebAppLike, WebAppOperations
+from azurator.fingerprints import secret_values_equal
 from azurator.models import (
     BindingInspection,
     BindingInspectionStatus,
@@ -454,9 +454,7 @@ def _transition_state(
 
 
 def _selectors_equal(settings: dict[str, str], selectors: tuple[str, ...], expected_key: str) -> bool:
-    return all(
-        selector in settings and secrets.compare_digest(settings[selector], expected_key) for selector in selectors
-    )
+    return all(selector in settings and secret_values_equal(settings[selector], expected_key) for selector in selectors)
 
 
 def _binding(

@@ -3,7 +3,7 @@
 - Start with [`knowledge/index.md`](knowledge/index.md), then read only the
   linked material relevant to the task.
 - Before changing product behavior, secret handling, provider contracts,
-  plans, operations, export, or rotation, read
+  plans, operations, export, refresh, or rotation, read
   [`knowledge/product/behavior.md`](knowledge/product/behavior.md) and
   [`knowledge/security/threat-model.md`](knowledge/security/threat-model.md)
   completely.

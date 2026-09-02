@@ -26,8 +26,8 @@ A key resource is the Azure resource that owns a supported key pair.
 | Azure AI, Cognitive Services, or Azure OpenAI resource | `Key1`, `Key2` | Supported | Supported when local key authentication is enabled. |
 
 `discover` shows key authentication as `enabled` or `disabled`. Disabled key
-resources remain visible, but their slots are not offered for export, planning,
-or rotation.
+resources remain visible, but their slots are not offered for export, refresh,
+planning, or rotation.
 
 An enabled state does not prove that the signed-in identity can retrieve or
 rotate keys. Discovery does not test those later permissions.
@@ -64,12 +64,18 @@ No listed binding means only that Azurator found no match among the binding
 types above. It does not prove that no other configuration or running workload
 uses the key.
 
-## Export
+## Export and refresh
 
 `azurator export` can create one new private dotenv file containing selected
 retrievable Storage or Azure AI key slots. `--out` creates plaintext.
 `--sops-out` encrypts and verifies the document through SOPS without writing
 plaintext to disk. Neither mode overwrites an existing file.
+
+`azurator refresh` uses a key map to replace mapped values in one existing
+plaintext or SOPS dotenv file. It preserves unmapped assignment values and never
+adds a missing selector. Plaintext refresh also preserves the remaining file
+content. Refresh reads current keys but does not rotate them or update Azure-side
+bindings.
 
 ## Not supported
 

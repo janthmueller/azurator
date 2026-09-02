@@ -222,7 +222,7 @@ def test_dotenv_provider_accepts_an_already_applied_transition_without_rewriting
 def test_dotenv_provider_blocks_a_third_value_without_overwriting_it(tmp_path: Path) -> None:
     path = _private_file(tmp_path)
     binding = attach_dotenv_file_bindings(_report(), path).bindings[-1]
-    content = "PRIMARY_KEY=third-secret\nALIAS_KEY=third-secret\n"
+    content = "PRIMARY_KEY=dritter-schlüssel\nALIAS_KEY=dritter-schlüssel\n"
     path.write_text(content, encoding="utf-8")
     path.chmod(0o600)
 
@@ -236,7 +236,7 @@ def test_dotenv_provider_blocks_a_third_value_without_overwriting_it(tmp_path: P
         )
 
     assert caught.value.code == "dotenv-file-binding-drift-detected"
-    assert "third-secret" not in str(caught.value)
+    assert "dritter-schlüssel" not in str(caught.value)
     assert path.read_text(encoding="utf-8") == content
 
 

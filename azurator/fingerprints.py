@@ -71,6 +71,20 @@ def erase_fingerprint(value: bytearray) -> None:
     _erase(value)
 
 
+def secret_values_equal(first: str, second: str) -> bool:
+    """Compare arbitrary UTF-8 secret values and erase the owned byte buffers."""
+
+    first_bytes = bytearray()
+    second_bytes = bytearray()
+    try:
+        first_bytes.extend(first.encode("utf-8"))
+        second_bytes.extend(second.encode("utf-8"))
+        return hmac.compare_digest(first_bytes, second_bytes)
+    finally:
+        _erase(first_bytes)
+        _erase(second_bytes)
+
+
 def new_key_state_salt() -> str:
     """Return a per-operation salt that prevents cross-operation key correlation."""
 

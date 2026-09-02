@@ -20,6 +20,7 @@ surface described in [product behavior](../product/behavior.md). It covers:
   and updates;
 - exclusive plaintext and verified SOPS-encrypted dotenv export;
 - secret-free reusable key-map creation and map-driven export;
+- strict key-map-driven refresh of existing plaintext and SOPS dotenv files;
 - generated plans, confirmed rotation, retained operations, and resume.
 
 The model protects retrievable, high-entropy Azure-generated account keys. It
@@ -46,9 +47,11 @@ an explicitly selected local plaintext or SOPS dotenv binding.
   dotenv export
 - raw account keys held transiently while constructing and verifying an
   encrypted dotenv export
+- raw account keys held transiently while refreshing existing dotenv bindings
 - raw SOPS-decrypted values held transiently in process memory
 - the integrity of managed or newly exported SOPS ciphertext and its recipient
   metadata
+- the integrity of plaintext and SOPS dotenv files refreshed from a key map
 - salted operation recovery fingerprints, which can verify a candidate account key
 - age private identities used by SOPS
 - the integrity of generated plans and transient operations
@@ -149,6 +152,21 @@ account keys that existed around a rotation.
     exclusively created at the destination with mode `0600`. Plaintext never
     enters a file or process argument. Cancellation, encryption or verification
     failure, and a destination race leave no destination.
+11. **Key-map refresh boundary.** `refresh` requires one strict key map and one
+    existing plaintext or SOPS dotenv target. The selected subscription and
+    every resource, slot, and selector are validated before key retrieval. Every
+    mapped selector must already exist. Missing selectors block rather than
+    being added, and assignments absent from the map remain outside the update.
+    After the complete secret-free intent is displayed and confirmed, reviewed
+    providers read each mapped key resource once. Plaintext mode constructs one
+    verified replacement in memory and atomically replaces only a still-identical
+    current-user-owned source. SOPS mode uses `sops set --value-stdin` on one
+    private encrypted temporary, HMAC-verifies mapped and unmapped assignments
+    after in-memory decryption, rechecks the source snapshot, and commits once.
+    Existing recipient metadata is delegated to SOPS and preserved through its
+    update contract. Refresh never rotates an Azure key, updates an Azure-side
+    binding, creates a plan or recovery operation, prints a value, writes SOPS
+    plaintext to disk, or partially commits a set of mapped assignments.
 
 ## Primary threats and controls
 
@@ -191,6 +209,9 @@ garbage collection.
 Raw input is converted immediately with a fresh random 256-bit HMAC key. The key
 and derived session fingerprints are never persisted. Candidate comparisons use
 the same per-process key and a constant-time equality function.
+Direct binding and refresh comparisons encode valid UTF-8 strings into owned
+mutable buffers before constant-time comparison, then erase those buffers. A
+non-ASCII stale binding value is ordinary drift, not a comparison error.
 
 Azurator does not accept portable digest or persistent-HMAC input. Any future
 proposal must remain limited to high-entropy Azure-generated keys, define a
@@ -234,18 +255,23 @@ and resume paths repeat the recorded mode rather than accepting a new
 inspection choice.
 
 A key map is data, not authority to broaden Azure scope. Loading it never signs
-in, switches subscriptions, or retrieves a key. Map-driven export requires the
-already selected subscription to match, resolves every mapped resource and
-exact slot through current metadata, displays the resulting intent, and uses the
-same confirmation and reviewed key-reading providers as other export modes. A
-modified map can change requested selectors or resources within that scope, so
-users must review it like other version-controlled infrastructure metadata.
+in, switches subscriptions, or retrieves a key. Map-driven export and refresh
+require the already selected subscription to match, resolve every mapped
+resource and exact slot through current metadata, display the resulting intent,
+and use the same confirmation and reviewed key-reading providers. Refresh also
+requires every mapped selector in its exact existing target before key
+retrieval. A modified map can change requested selectors or resources within
+that scope, so users must review it like other version-controlled infrastructure
+metadata.
 
 ### Unintended mutation
 
-Discovery, matching, and planning are read-only. Mutation is isolated behind
-`rotate`, a validated generated plan, current source-appropriate matching or
-direct-selection inspection, drift checks, and explicit user confirmation.
+Discovery, matching, and planning are read-only. Azure key mutation is isolated
+behind `rotate`, a validated generated plan, current source-appropriate matching
+or direct-selection inspection, drift checks, and explicit user confirmation.
+The separate `refresh` command changes only one explicitly named local file
+after complete key-map, target, subscription, inventory, intent, and
+confirmation checks. It does not reuse or bypass rotation execution.
 `rotate --plan` revalidates an earlier private plan against a newly generated
 snapshot. Flagless `rotate`, `rotate --select`, `rotate --env-file`, and
 `rotate --sops-file` first generate and display that same plan from the current
@@ -408,10 +434,10 @@ required and stdout is never a secret sink. Before any key-returning call,
 Azurator resolves the existing parent while preserving the final component,
 rejects an existing destination, validates every picker-, repeatable-`--select`-,
 `--all`-, or key-map-selected resource/slot/selector mapping against the
-complete metadata inventory and installed reviewed providers, displays the
-mapping plus a plaintext warning, and asks for confirmation unless `--yes` was
-given. `--all` means every retrievable slot displayed by those providers in the
-one selected subscription, not every Azure secret.
+complete metadata inventory and installed reviewed providers, displays each
+resource group/name mapping plus a plaintext warning, and asks for confirmation
+unless `--yes` was given. `--all` means every retrievable slot displayed by
+those providers in the one selected subscription, not every Azure secret.
 
 After confirmation, the exact reviewed pair for each selected resource is read
 once and only selected slots are retained in the canonical single-quoted dotenv
@@ -468,6 +494,33 @@ have both encryption configuration and immediate decrypt access. A compromised
 SOPS executable, configured backend, or host can observe plaintext and remains
 outside Azurator's protection boundary.
 
+### Plaintext leakage and unintended changes during refresh
+
+Refresh accepts no raw value through arguments and never uses the target's
+existing values to discover Azure identities. The secret-free key map supplies
+the exact selectors, resources, and slots. Before a key-returning call, Azurator
+safe-reads or decrypts the target and requires every mapped selector in one
+strict dotenv document. It then validates subscription scope and fresh resource
+metadata, displays the complete intent with each exact resource group and name,
+and confirms the local change.
+
+After confirmation, current values exist in memory only. Plaintext refresh
+rewrites only changed mapped assignments in one generated document. It preserves
+all other bytes, checks the generated mapped values, and atomically replaces the
+source only if its identity, metadata, size, and digest still match the read
+snapshot. SOPS refresh works on one same-directory private encrypted temporary.
+It sets only changed mapped selectors over stdin, decrypts the result in memory,
+HMAC-verifies every mapped value and every unmapped assignment, and applies the
+same unchanged-source commit check. Any pre-commit failure leaves the source
+unchanged. Already current assignments do not cause a rewrite.
+
+Refresh deliberately does not add a selector that is present only in the map.
+It also does not remove or reinterpret selectors present only in the target.
+This prevents a map or path mistake from silently changing document structure.
+The command has no recovery artifact because it performs no Azure mutation and
+commits the complete local replacement once. A host or non-cooperating writer
+can still change the file immediately after that commit.
+
 ### Decrypted-content leakage during managed SOPS updates
 
 The implemented adapter accepts SOPS-encrypted dotenv only. It invokes SOPS
@@ -499,8 +552,9 @@ identity backend, or host remains outside the protection boundary.
 - Azurator has no global rotation lock. Non-overlapping operations may run in
   parallel, but concurrent execution of the same operation ID, operations
   sharing an Azure account resource, or operations managing the same plaintext
-  or SOPS dotenv file are unsupported. Drift checks reduce stale-state risk but
-  do not close the read-before-mutation race or coordinate across hosts.
+  or SOPS dotenv file are unsupported. The same applies to refresh and another
+  writer targeting one file. Drift checks reduce stale-state risk but do not
+  close the read-before-mutation race or coordinate across hosts.
 - Credential-binding coverage is limited to installed reviewed providers.
   Configuration outside that coverage can leave workloads unable to
   authenticate after rotation.
@@ -520,7 +574,7 @@ identity backend, or host remains outside the protection boundary.
   restart, or health-check applications that may consume them. The explicit
   mode stores keys as plaintext at rest. Atomic replacement does not coordinate
   with non-Azurator writers, so the file must not be edited concurrently with
-  rotation.
+  rotation or refresh.
 - Azurator verifies managed SOPS dotenv assignments after decryption but does
   not reload or health-check their consumers. It requires SOPS 3.13.x and a
   working user-configured identity backend. It does not create recipients,
@@ -532,9 +586,11 @@ identity backend, or host remains outside the protection boundary.
   decrypt identity. Azurator does not manage recipients, merge or replace an
   existing document, or hide dotenv selector names and SOPS metadata that remain
   visible in ciphertext.
-- A key map can recreate only its mapped Azure key assignments. It cannot
-  reconstruct unrelated dotenv values or SOPS recipient configuration. Sharing
-  it also shares subscription, resource-ID, slot, and selector metadata.
+- A key map can create or refresh only its mapped Azure key assignments. Export
+  cannot reconstruct unrelated dotenv values or SOPS recipient configuration.
+  Refresh preserves unrelated assignments but never adds a missing mapped
+  selector. Sharing a map also shares subscription, resource-ID, slot, and
+  selector metadata.
 - The current Foundry data-plane endpoint allowlist covers Azure public cloud;
   unsupported cloud endpoint suffixes are reported as inspection gaps.
 - Microsoft does not currently publish the Foundry data-plane `AccountKey`
@@ -572,8 +628,8 @@ identity backend, or host remains outside the protection boundary.
 ## Review gates
 
 The Storage/Cognitive/Foundry/App-Service/plaintext-dotenv/SOPS-dotenv rotation
-slice, key maps, and private plaintext or SOPS dotenv export are limited to
-their reviewed plan, file, failure, redaction, provider, and drift contracts.
-Any new rotating provider, credential-binding category, workload verifier, or
-secret output must pass the same review and negative-path tests before
-registration. No live Azure mutation belongs in automated tests.
+slice, key maps, private plaintext or SOPS dotenv export, and local refresh are
+limited to their reviewed plan, file, failure, redaction, provider, and drift
+contracts. Any new rotating provider, credential-binding category, workload
+verifier, or secret output must pass the same review and negative-path tests
+before registration. No live Azure mutation belongs in automated tests.

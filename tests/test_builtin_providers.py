@@ -93,6 +93,10 @@ def test_builtin_support_catalog_projects_domain_roles_without_clients() -> None
         ("key1", "key2"),
         ("Key1", "Key2"),
     ]
+    assert all(
+        resource.operations == ("discover", "match", "export", "refresh", "rotate")
+        for resource in catalog.key_resources
+    )
     assert [binding.contract_id for binding in catalog.credential_bindings] == [
         "azure-foundry-connections",
         "azure-app-service-settings",

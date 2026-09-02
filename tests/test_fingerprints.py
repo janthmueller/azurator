@@ -10,6 +10,7 @@ from azurator.fingerprints import (
     equal_key_state_fingerprints,
     erase_fingerprint,
     new_key_state_salt,
+    secret_values_equal,
 )
 
 
@@ -35,6 +36,11 @@ def test_closed_fingerprinter_refuses_reuse() -> None:
 
     with pytest.raises(RuntimeError, match="closed"):
         fingerprinter.derive("value")
+
+
+def test_secret_value_equality_accepts_arbitrary_utf8_without_exposing_a_type_boundary() -> None:
+    assert secret_values_equal("älterer-schlüssel", "älterer-schlüssel")
+    assert not secret_values_equal("älterer-schlüssel", "current-azure-key")
 
 
 def test_ephemeral_key_must_be_256_bits() -> None:

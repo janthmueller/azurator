@@ -465,12 +465,12 @@ def test_list_groups_supported_key_resources_and_bindings_without_authentication
     assert "--env-file" in result.stdout
     assert "SOPS-encrypted dotenv assignments" in result.stdout
     assert "--sops-file" in result.stdout
-    assert "Supports discovery, matching, export, and rotation" not in result.stdout
+    assert "Supports discovery, matching, export, refresh, and rotation" not in result.stdout
     assert "Supports inspection, update, and verification" not in result.stdout
 
     verbose = CliRunner().invoke(app, ["-v", "list"])
     assert verbose.exit_code == 0
-    assert "Supports discovery, matching, export, and rotation" in verbose.stdout
+    assert "Supports discovery, matching, export, refresh, and rotation" in verbose.stdout
     assert "Supports inspection, update, and verification" in verbose.stdout
 
 
@@ -508,7 +508,7 @@ def test_list_supports_structured_domain_output() -> None:
         "name": "Storage Account",
         "resource_type": "Microsoft.Storage/storageAccounts",
         "key_slots": ["key1", "key2"],
-        "operations": ["discover", "match", "export", "rotate"],
+        "operations": ["discover", "match", "export", "refresh", "rotate"],
         "contract_id": "azure-storage",
         "contract_version": "1",
     }

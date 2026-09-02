@@ -123,6 +123,9 @@ from azurator.presentation import (
     render_plan as _render_plan,
 )
 from azurator.presentation import (
+    render_refresh_intent as _render_refresh_intent,
+)
+from azurator.presentation import (
     render_rotate_complete as _render_rotate_complete,
 )
 from azurator.presentation import (
@@ -152,6 +155,12 @@ from azurator.providers.sops_dotenv_file import (
     SopsDotenvFileProvider,
     attach_sops_dotenv_file_bindings,
     normalize_sops_dotenv_file_path,
+)
+from azurator.refreshing import (
+    DotenvRefreshResult,
+    PlaintextDotenvRefreshService,
+    RefreshError,
+    SopsDotenvRefreshService,
 )
 from azurator.sops import SopsCli, SopsError
 from azurator.workflows import RotationPlanningWorkflow
@@ -347,6 +356,14 @@ def _export_service(subscription_id: str) -> DotenvExportService:
 
 def _sops_export_service() -> SopsDotenvExportService:
     return SopsDotenvExportService(SopsCli())
+
+
+def _plaintext_refresh_service() -> PlaintextDotenvRefreshService:
+    return PlaintextDotenvRefreshService()
+
+
+def _sops_refresh_service() -> SopsDotenvRefreshService:
+    return SopsDotenvRefreshService(SopsCli())
 
 
 def _validate_subscription(value: str) -> str:
@@ -1223,6 +1240,165 @@ def export_keys(
             typer.echo("Key values were written only to that file and were not printed.")
 
 
+@app.command("refresh")
+def refresh_keys(
+    context: typer.Context,
+    key_map_file: Path = typer.Option(
+        ...,
+        "--key-map",
+        help="Read exact dotenv selectors and Azure key slots from this key-map JSON file.",
+    ),
+    env_file: Path | None = typer.Option(
+        None,
+        "--env-file",
+        help="Refresh existing assignments in one plaintext dotenv file.",
+    ),
+    sops_file: Path | None = typer.Option(
+        None,
+        "--sops-file",
+        help="Refresh existing assignments in one SOPS-encrypted dotenv file.",
+    ),
+    subscription: str | None = typer.Option(
+        None,
+        "--subscription",
+        help="Azure subscription UUID for this command; defaults to the selection made during login.",
+    ),
+    yes: bool = typer.Option(
+        False,
+        "--yes",
+        "-y",
+        help="Skip the final confirmation. Key-map, subscription, and file checks still apply.",
+    ),
+) -> None:
+    """Refresh mapped values in one existing plaintext or SOPS dotenv file."""
+
+    target_count = int(env_file is not None) + int(sops_file is not None)
+    if target_count != 1:
+        _fail("select one refresh target: --env-file for plaintext or --sops-file for SOPS encryption")
+    target_option = sops_file if sops_file is not None else env_file
+    assert target_option is not None
+    encrypted = sops_file is not None
+    if _paths_refer_to_same_file(key_map_file, target_option):
+        _fail("--key-map must not refer to the dotenv target file")
+
+    try:
+        loaded_key_map = parse_key_map(read_regular_text(key_map_file, max_bytes=_MAX_JSON_ARTIFACT_BYTES))
+    except KeyMapError as error:
+        _fail(str(error))
+    except (OSError, UnicodeError, UnsafeInputPathError):
+        _fail("the key-map file is missing, unsafe, too large, or invalid")
+
+    selectors = tuple(mapping.selector for mapping in loaded_key_map.mappings)
+    try:
+        target = (
+            normalize_sops_dotenv_file_path(target_option) if encrypted else normalize_dotenv_file_path(target_option)
+        )
+    except OSError:
+        _fail("the dotenv refresh target has a missing or unsafe parent directory")
+
+    plaintext_refresh = _plaintext_refresh_service() if not encrypted else None
+    sops_refresh = _sops_refresh_service() if encrypted else None
+    try:
+        if sops_refresh is not None:
+            sops_refresh.validate_target(target, selectors)
+        else:
+            assert plaintext_refresh is not None
+            plaintext_refresh.validate_target(target, selectors)
+            _warn_for_broad_dotenv_permissions(target)
+    except RefreshError as error:
+        _fail(str(error))
+    except (OSError, UnsafeInputPathError):
+        _fail("the plaintext dotenv file changed while its permissions were being inspected")
+
+    selected_subscription = _resolve_subscription(subscription)
+    if loaded_key_map.subscription_id.casefold() != selected_subscription.subscription_id.casefold():
+        _fail("the selected Azure subscription does not match the subscription recorded in the key map")
+
+    try:
+        inventory = _discover_inventory(selected_subscription.subscription_id).model_copy(
+            update={"subscription_name": selected_subscription.name}
+        )
+        assignments = build_key_map_export_assignments(inventory, loaded_key_map)
+    except ExportError as error:
+        _fail(str(error))
+    except (
+        AuthConfigurationError,
+        AuthenticationRequiredError,
+        ClientAuthenticationError,
+        CredentialUnavailableError,
+    ) as error:
+        _authentication_failure(error)
+    except (HttpResponseError, ServiceRequestError, ServiceResponseError):
+        _fail("Azure key-resource discovery for refresh failed")
+
+    detail = _output_detail(context)
+    _render_refresh_intent(
+        assignments,
+        target,
+        selected_subscription,
+        encrypted=encrypted,
+        detail=detail,
+    )
+    confirmation = (
+        "Refresh these existing assignments in the displayed SOPS dotenv file?"
+        if encrypted
+        else "Refresh these existing assignments in the displayed plaintext dotenv file?"
+    )
+    if not yes and not _confirm_mutation(confirmation):
+        typer.echo("Refresh cancelled.")
+        return
+
+    payload = ""
+    result: DotenvRefreshResult
+    try:
+        with _terminal_status(
+            "Retrieving current Azure keys and refreshing the SOPS file..."
+            if encrypted
+            else "Retrieving current Azure keys..."
+        ):
+            payload = _export_service(selected_subscription.subscription_id).render(
+                selected_subscription.subscription_id,
+                assignments,
+            )
+            if sops_refresh is not None:
+                result = sops_refresh.refresh(target, selectors, payload)
+            else:
+                assert plaintext_refresh is not None
+                result = plaintext_refresh.refresh(target, selectors, payload)
+    except (
+        AuthConfigurationError,
+        AuthenticationRequiredError,
+        ClientAuthenticationError,
+        CredentialUnavailableError,
+    ) as error:
+        _authentication_failure(error)
+    except ProviderOperationError:
+        _fail("Azure key refresh failed while reading a mapped key resource; the file was not refreshed")
+    except (HttpResponseError, ServiceRequestError, ServiceResponseError):
+        _fail("Azure key refresh failed; the file was not refreshed")
+    except ExportError:
+        _fail("Azure key refresh returned data outside the supported contract; the file was not refreshed")
+    except RefreshError as error:
+        _fail(str(error))
+    finally:
+        payload = ""
+
+    assignment_count = result.assignment_count
+    assignment_noun = "assignment" if assignment_count == 1 else "assignments"
+    file_kind = "SOPS-encrypted dotenv" if encrypted else "plaintext dotenv"
+    if result.changed_assignment_count == 0:
+        typer.echo(
+            f"All {assignment_count} mapped {assignment_noun} in {file_kind} file {target} were already current."
+        )
+        return
+    changed_count = result.changed_assignment_count
+    changed_noun = "assignment" if changed_count == 1 else "assignments"
+    typer.echo(f"Refreshed {changed_count} mapped {changed_noun} in {file_kind} file {target}.")
+    if result.already_current_count:
+        current_noun = "assignment was" if result.already_current_count == 1 else "assignments were"
+        typer.echo(f"{result.already_current_count} mapped {current_noun} already current.")
+
+
 def _rotation_planning_workflow(
     detail: OutputDetail = OutputDetail.normal,
 ) -> RotationPlanningWorkflow:
@@ -1808,5 +1984,7 @@ def _confirm_mutation(prompt: str) -> bool:
                 terminal.flush()
                 response = terminal.readline()
     except OSError:
-        _fail("explicit confirmation requires a controlling terminal; review the plan and rerun with --yes")
+        _fail(
+            "explicit confirmation requires a controlling terminal; review the displayed changes and rerun with --yes"
+        )
     return response.strip().casefold() in {"y", "yes"}

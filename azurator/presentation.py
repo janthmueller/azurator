@@ -211,7 +211,7 @@ def render_support_catalog(
         console.print(table)
         if detail >= OutputDetail.verbose:
             console.print()
-            console.print("[dim]Supports discovery, matching, export, and rotation.[/dim]")
+            console.print("[dim]Supports discovery, matching, export, refresh, and rotation.[/dim]")
 
     if show_key_resources and show_bindings:
         console.print()
@@ -352,7 +352,7 @@ def render_export_intent(
     for assignment in assignments:
         table.add_row(
             escape(assignment.selector),
-            escape(assignment.resource.name),
+            escape(_key_resource_intent_label(assignment)),
             escape(service_label(assignment.resource.provider, assignment.resource.kind)),
             escape(assignment.key_slot),
         )
@@ -374,6 +374,52 @@ def render_export_intent(
         console.print(
             "[dim]The export contains only the displayed retrievable slots from supported key resources.[/dim]"
         )
+
+
+def render_refresh_intent(
+    assignments: tuple[DotenvExportAssignment, ...],
+    target: Path,
+    subscription: SubscriptionSelection,
+    *,
+    encrypted: bool,
+    detail: OutputDetail = OutputDetail.normal,
+) -> None:
+    """Render one complete secret-free Azure-to-dotenv refresh intent."""
+
+    console = Console()
+    slot_count = len({(assignment.resource.resource_id.casefold(), assignment.key_slot) for assignment in assignments})
+    slot_noun = "key slot" if slot_count == 1 else "key slots"
+    assignment_count = len(assignments)
+    assignment_noun = "assignment" if assignment_count == 1 else "assignments"
+    title = "SOPS dotenv refresh" if encrypted else "Plaintext dotenv refresh"
+    console.print(f"[bold]{title}[/bold] [dim]· {slot_count} {slot_noun}, {assignment_count} {assignment_noun}[/dim]")
+    console.print(f"[dim]Subscription {subscription_label(subscription.subscription_id, subscription.name)}[/dim]")
+    console.print(f"[dim]File {escape(str(target))}[/dim]")
+    console.print()
+    table = Table()
+    table.add_column("Environment selector")
+    table.add_column("Key resource")
+    table.add_column("Service")
+    table.add_column("Slot")
+    for assignment in assignments:
+        table.add_row(
+            escape(assignment.selector),
+            escape(_key_resource_intent_label(assignment)),
+            escape(service_label(assignment.resource.provider, assignment.resource.kind)),
+            escape(assignment.key_slot),
+        )
+    console.print(table)
+    console.print()
+    preserved = "Other dotenv assignment values are preserved." if encrypted else "Other file content is preserved."
+    console.print(f"[dim]Only the displayed existing assignments receive current Azure values. {preserved}[/dim]")
+    if encrypted and detail >= OutputDetail.verbose:
+        console.print("[dim]SOPS updates and verifies an encrypted temporary. No plaintext file is written.[/dim]")
+
+
+def _key_resource_intent_label(assignment: DotenvExportAssignment) -> str:
+    """Render the concise ARM identity validated during assignment resolution."""
+
+    return f"{assignment.resource_group} / {assignment.resource.name}"
 
 
 def render_plan(

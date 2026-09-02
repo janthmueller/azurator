@@ -32,6 +32,7 @@ azurator/
 ├── operation.py
 ├── planning.py
 ├── presentation.py
+├── refreshing.py
 ├── sops.py
 ├── workflows.py
 └── providers/
@@ -65,6 +66,8 @@ Production code lives directly in `azurator/`, with no `src/` wrapper.
   local secret and persistence boundaries.
 - `key_map.py` projects confirmed matches into the strict reusable secret-free
   mapping artifact and validates that artifact when it is loaded.
+- `refreshing.py` owns strict all-or-nothing plaintext and SOPS dotenv refresh
+  from current Azure values without rotation or recovery state.
 - `providers/` hides Azure or local discovery, matching, transition,
   verification, API-version, response-shape, and permission contracts behind
   explicit interfaces.

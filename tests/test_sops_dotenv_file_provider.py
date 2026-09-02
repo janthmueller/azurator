@@ -164,7 +164,7 @@ def test_sops_provider_accepts_already_applied_transition_without_rewriting(tmp_
 
 def test_sops_provider_blocks_drift_without_replacing_ciphertext(tmp_path: Path) -> None:
     path = _encrypted_file(tmp_path)
-    write_fake_sops_file(path, "PRIMARY_KEY=third-secret\nUNRELATED=leave-me\nALIAS_KEY=third-secret\n")
+    write_fake_sops_file(path, "PRIMARY_KEY=dritter-schlüssel\nUNRELATED=leave-me\nALIAS_KEY=dritter-schlüssel\n")
     original = path.read_bytes()
 
     with pytest.raises(ProviderOperationError) as caught:
@@ -177,7 +177,7 @@ def test_sops_provider_blocks_drift_without_replacing_ciphertext(tmp_path: Path)
         )
 
     assert caught.value.code == "sops-file-binding-drift-detected"
-    assert "third-secret" not in str(caught.value)
+    assert "dritter-schlüssel" not in str(caught.value)
     assert path.read_bytes() == original
 
 

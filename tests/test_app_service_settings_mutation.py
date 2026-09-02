@@ -112,7 +112,7 @@ def test_app_service_update_is_a_noop_when_the_replacement_is_already_present() 
 @pytest.mark.parametrize(
     "settings",
     (
-        {"ALIAS": "third-secret", "PRIMARY": "third-secret"},
+        {"ALIAS": "dritter-schlüssel", "PRIMARY": "dritter-schlüssel"},
         {"ALIAS": "current-storage-key", "PRIMARY": "replacement-storage-key"},
         {"PRIMARY": "current-storage-key"},
     ),
@@ -132,7 +132,7 @@ def test_app_service_update_blocks_third_mixed_or_missing_values(settings: dict[
         )
 
     assert caught.value.code == "app-service-settings-binding-drift-detected"
-    assert "third-secret" not in str(caught.value)
+    assert "dritter-schlüssel" not in str(caught.value)
     assert "current-storage-key" not in str(caught.value)
     assert "replacement-storage-key" not in str(caught.value)
     assert operations.update_calls == []
@@ -240,8 +240,8 @@ def test_app_service_verification_mismatch_is_secret_free() -> None:
     operations = FakeWebAppOperations(
         settings={
             "example-app": {
-                "ALIAS": "stored-secret",
-                "PRIMARY": "stored-secret",
+                "ALIAS": "gespeicherter-schlüssel",
+                "PRIMARY": "gespeicherter-schlüssel",
             }
         }
     )
@@ -256,7 +256,7 @@ def test_app_service_verification_mismatch_is_secret_free() -> None:
         )
 
     assert caught.value.code == BINDING_VERIFICATION_MISMATCH_CODE
-    assert "stored-secret" not in str(caught.value)
+    assert "gespeicherter-schlüssel" not in str(caught.value)
     assert "expected-secret" not in str(caught.value)
     assert client.closed
 
