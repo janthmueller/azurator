@@ -77,9 +77,13 @@ def test_operation_list_is_empty_without_creating_state_or_contacting_azure(
     result = CliRunner().invoke(app, ["operation", "list"])
 
     assert result.exit_code == 0
-    assert "No retained rotation operation was found." in result.output
-    assert "leave no local operation history" in result.output
+    assert "No retained rotation operations." in result.output
+    assert "do not retain local operation history" not in result.output
     assert not root.exists()
+
+    verbose = CliRunner().invoke(app, ["-v", "operation", "list"])
+    assert verbose.exit_code == 0
+    assert "do not retain local operation history" in verbose.output
 
 
 def test_operation_list_renders_valid_progress_and_failure_metadata(
@@ -103,10 +107,20 @@ def test_operation_list_renders_valid_progress_and_failure_metadata(
     assert operation.plan.subscription_id in result.output
     assert f"1/{len(operation.plan.steps)}" in result.output
     assert operation.error_code is not None
-    assert operation.error_code in result.output
+    assert operation.error_code not in result.output
     assert "pending" in result.output
     assert _SECRET_MARKER not in result.output
-    assert "Azure was not contacted" in " ".join(result.output.split())
+    assert "Azure was not contacted" not in " ".join(result.output.split())
+
+    verbose = CliRunner().invoke(
+        app,
+        ["-v", "operation", "list"],
+        terminal_width=240,
+    )
+    assert verbose.exit_code == 0
+    assert operation.error_code in verbose.output
+    assert "Azure was not contacted" in " ".join(verbose.output.split())
+    assert _SECRET_MARKER not in verbose.output
 
 
 def test_operation_list_sorts_valid_operations_by_latest_update(
@@ -151,16 +165,27 @@ def test_operation_show_explains_the_pending_checkpoint_and_resume_command(
 
     assert result.exit_code == 0
     assert "Pending checkpoint" in result.output
-    assert "recorded before its call" in result.output
+    assert "Current Azure state will be reconciled before this step is resumed" in result.output
     assert "accountone" in result.output
     assert "Storage Account" in result.output
     assert "key1" in result.output
     assert operation.error_code is not None
     assert operation.error_code in result.output
     assert f"azurator rotate --resume {operation.operation_id}" in result.output
-    assert "Resume repeats" in result.output
+    assert "Resume repeats" not in result.output
     assert _SECRET_MARKER not in result.output
     assert RESOURCE_ID not in result.output
+
+    verbose = CliRunner().invoke(
+        app,
+        ["-v", "operation", "show", str(operation.operation_id)],
+        terminal_width=180,
+    )
+    assert verbose.exit_code == 0
+    assert "Resume repeats" in verbose.output
+    assert "Azure" in verbose.output
+    assert _SECRET_MARKER not in verbose.output
+    assert RESOURCE_ID not in verbose.output
 
 
 def test_operation_json_is_a_minimal_projection_without_recovery_verifiers_or_plan(

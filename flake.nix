@@ -1,5 +1,5 @@
 {
-  description = "Rotate shared Azure account keys and update supported configuration";
+  description = "Rotate shared keys for Azure services and update supported places that store them";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
@@ -259,6 +259,8 @@
             }
             ''
               shellcheck ${liveTestInfra}/lifecycle.sh
+              shellcheck ${liveTestInfra}/scope.sh ${liveTestInfra}/scope_test.sh
+              bash ${liveTestInfra}/scope_test.sh
               touch "$out"
             '';
 
@@ -379,6 +381,7 @@
               export AZURATOR_LIVE_TEST_TEMPLATE="${liveTestInfra}/main.bicep"
               export AZURATOR_LIVE_TEST_RESOURCES="${liveTestInfra}/resources.bicep"
               export AZURATOR_LIVE_TEST_PARAMETERS="${liveTestInfra}/live-test.bicepparam"
+              export AZURATOR_LIVE_TEST_SCOPE_FILE="$PWD/infra/live-test/.env"
               exec ${pkgs.bash}/bin/bash "${liveTestInfra}/lifecycle.sh" ${command} "$@"
             '';
           };
@@ -409,6 +412,7 @@
             export AZURATOR_LIVE_TEST_SOPS="${pkgs.sops}/bin/sops"
             export AZURATOR_LIVE_TEST_AZURATOR="${azurator}/bin/azurator"
             export AZURATOR_LIVE_TEST_LIFECYCLE="${liveTestInfra}/lifecycle.sh"
+            export AZURATOR_LIVE_TEST_SCOPE_FILE="$PWD/infra/live-test/.env"
             exec ${pkgs.bash}/bin/bash "${liveTestInfra}/e2e.sh" "$@"
           '';
         };
@@ -431,6 +435,7 @@
             export AZURATOR_LIVE_TEST_JQ="${pkgs.jq}/bin/jq"
             export AZURATOR_LIVE_TEST_AZURATOR="${azurator}/bin/azurator"
             export AZURATOR_LIVE_TEST_LIFECYCLE="${liveTestInfra}/lifecycle.sh"
+            export AZURATOR_LIVE_TEST_SCOPE_FILE="$PWD/infra/live-test/.env"
             exec ${pkgs.bash}/bin/bash "${liveTestInfra}/recovery.sh" "$@"
           '';
         };

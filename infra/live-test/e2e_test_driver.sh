@@ -70,6 +70,16 @@ render_managed_env() {
   printf "AZURATOR_COGNITIVE_AOAI_AZURATOR_TEST_KEY1='openai-secret-%s'\n" "$suffix"
 }
 
+render_mapped_env() {
+  local suffix="$1"
+  render_managed_env "$suffix"
+  printf "AZURATOR_STORAGE_LOCAL_ALIAS='storage-secret-%s'\n" "$suffix"
+  printf "AZURATOR_STORAGE_SECONDARY_LOCAL_ALIAS='storage-secret-secondary-%s'\n" "$suffix"
+  if [[ "$MODE" != "bad-key-map-export" ]]; then
+    printf "AZURATOR_OPENAI_LOCAL_ALIAS='openai-secret-%s'\n" "$suffix"
+  fi
+}
+
 sops_selector_path() {
   # jq variable, not a shell variable, is intentionally expanded here.
   # shellcheck disable=SC2016
@@ -307,6 +317,39 @@ write_sops_match_report() {
     '
 }
 
+write_key_map() {
+  local destination="$1"
+  local schema_version="1"
+  local temporary
+  if [[ "$MODE" == "bad-key-map" ]]; then
+    schema_version="unexpected"
+  fi
+  temporary="$(mktemp "${destination%/*}/.fake-key-map.XXXXXXXX")"
+  # jq variables, not shell variables, are intentionally expanded here.
+  # shellcheck disable=SC2016
+  "$JQ_BIN" -n \
+    --arg schema_version "$schema_version" \
+    --arg subscription_id "$SUBSCRIPTION_ID" \
+    --arg storage_id "$STORAGE_ACCOUNT_ID" \
+    --arg openai_id "$OPENAI_ACCOUNT_ID" \
+    '
+      {
+        schema_version: $schema_version,
+        subscription_id: $subscription_id,
+        mappings: [
+          {selector: "AZURATOR_STORAGE_STAZURATORTEST_KEY1", key_resource_id: $storage_id, key_slot: "key1"},
+          {selector: "AZURATOR_STORAGE_STAZURATORTEST_KEY2", key_resource_id: $storage_id, key_slot: "key2"},
+          {selector: "AZURATOR_COGNITIVE_AOAI_AZURATOR_TEST_KEY1", key_resource_id: $openai_id, key_slot: "Key1"},
+          {selector: "AZURATOR_STORAGE_LOCAL_ALIAS", key_resource_id: $storage_id, key_slot: "key1"},
+          {selector: "AZURATOR_STORAGE_SECONDARY_LOCAL_ALIAS", key_resource_id: $storage_id, key_slot: "key2"},
+          {selector: "AZURATOR_OPENAI_LOCAL_ALIAS", key_resource_id: $openai_id, key_slot: "Key1"}
+        ]
+      }
+    ' >"$temporary"
+  chmod 600 "$temporary"
+  mv -f -- "$temporary" "$destination"
+}
+
 write_sops_plan() {
   local sops_path="$1"
   local omit_restore=false
@@ -450,7 +493,7 @@ write_sops_plan() {
 run_azurator() {
   local command="${1:-}"
   local ciphertext_temp destination disabled_foundry_auth disabled_foundry_available
-  local disabled_storage_auth disabled_storage_available managed_env selection
+  local disabled_storage_auth disabled_storage_available key_map managed_env selection
   local -a selections
   case "$command" in
     operation)
@@ -543,7 +586,20 @@ run_azurator() {
         return
       fi
       mapfile -t selections < <(option_values --select "$@")
-      if [[ "${#selections[@]}" -eq 1 && "${selections[0]}" == "$FOUNDRY_ACCOUNT_ID#Key1" ]]; then
+      if has_option --key-map "$@"; then
+        key_map="$(option_value --key-map "$@")"
+        destination="$(option_value --sops-out "$@")"
+        [[ -f "$key_map" && ! -L "$key_map" ]] || exit 2
+        ciphertext_temp="$(mktemp "${destination%/*}/.fake-sops.XXXXXXXX")"
+        render_mapped_env "before" \
+          | "$SOPS_BIN" encrypt \
+            --filename-override "$destination" \
+            --input-type dotenv \
+            --output-type dotenv \
+            >"$ciphertext_temp"
+        mv -f -- "$ciphertext_temp" "$destination"
+        chmod 600 "$destination"
+      elif [[ "${#selections[@]}" -eq 1 && "${selections[0]}" == "$FOUNDRY_ACCOUNT_ID#Key1" ]]; then
         destination="$(option_value --out "$@")"
         write_foundry_snapshot "$destination"
       else
@@ -624,6 +680,12 @@ run_azurator() {
         return
       fi
       managed_env="$(option_value --sops-file "$@")"
+      if has_option --key-map-out "$@"; then
+        destination="$(option_value --key-map-out "$@")"
+        write_key_map "$destination"
+        printf 'Fake reusable key map created.\n'
+        return
+      fi
       write_sops_match_report "$managed_env"
       ;;
     *)

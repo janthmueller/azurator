@@ -179,7 +179,7 @@ def test_sops_export_creates_only_verified_ciphertext(
 
     result = CliRunner().invoke(
         app,
-        ["export", "--all", "--sops-out", str(destination), "--yes"],
+        ["-v", "export", "--all", "--sops-out", str(destination), "--yes"],
     )
 
     assert result.exit_code == 0
@@ -189,8 +189,8 @@ def test_sops_export_creates_only_verified_ciphertext(
     assert sops_service.validation_calls == 1
     assert sops_service.encrypt_calls == [(payload, destination.resolve())]
     assert "SOPS-encrypted dotenv export · 2 key slots" in result.output
-    assert "No plaintext file will be written" in " ".join(result.output.split())
-    assert "Exported 2 Azure key slots to private SOPS-encrypted dotenv file" in result.output
+    assert "No plaintext file is written" in " ".join(result.output.split())
+    assert "Exported 2 Azure key slots to SOPS-encrypted dotenv file" in result.output
     assert _KEY_ONE not in result.output
     assert _KEY_TWO not in result.output
 
@@ -243,7 +243,7 @@ def test_export_cancellation_reads_no_keys_and_writes_no_file(
     assert result.exit_code == 0
     assert service.calls == []
     assert not destination.exists()
-    assert "Export cancelled; no key values were retrieved" in result.output
+    assert "Export cancelled." in result.output
     assert _KEY_ONE not in result.output
 
 
@@ -273,7 +273,7 @@ def test_sops_export_cancellation_constructs_no_sops_service_and_reads_no_keys(
     assert result.exit_code == 0
     assert service.calls == []
     assert not destination.exists()
-    assert "no key values were retrieved" in result.output
+    assert "Export cancelled." in result.output
 
 
 @pytest.mark.parametrize("output_option", ("--out", "--sops-out"))
@@ -326,7 +326,7 @@ def test_export_requires_an_explicit_selection_without_a_controlling_terminal(
     )
 
     assert result.exit_code == 1
-    assert "use --select or --all instead" in result.output
+    assert "use --select, --all, or --key-map instead" in result.output
 
 
 @pytest.mark.parametrize(
@@ -354,7 +354,7 @@ def test_export_redacts_provider_and_transport_failures(
 
     assert result.exit_code == 1
     assert not destination.exists()
-    assert "no dotenv file was written" in result.output
+    assert "no file was created" in result.output
     assert _KEY_ONE not in result.output
     assert "Traceback" not in result.output
 

@@ -6,7 +6,7 @@ from datetime import datetime
 from enum import Enum
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class AzuratorModel(BaseModel):
@@ -229,6 +229,33 @@ class KeyMatch(AzuratorModel):
     input_selector: str = Field(min_length=1)
     resource_id: str = Field(min_length=1)
     key_slot: str = Field(min_length=1)
+
+
+class KeyMapEntry(AzuratorModel):
+    """One portable dotenv selector mapped to an exact Azure key slot."""
+
+    selector: str = Field(min_length=1)
+    key_resource_id: str = Field(min_length=1)
+    key_slot: str = Field(min_length=1)
+
+
+class KeyMap(AzuratorModel):
+    """A secret-free, reusable selector-to-Azure-key mapping artifact."""
+
+    schema_version: Literal["1"] = "1"
+    subscription_id: str = Field(min_length=1)
+    mappings: tuple[KeyMapEntry, ...] = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def require_unique_selectors(self) -> KeyMap:
+        """Keep every dotenv selector bound to exactly one artifact entry."""
+
+        selectors: set[str] = set()
+        for mapping in self.mappings:
+            if mapping.selector in selectors:
+                raise ValueError("key-map selectors must be unique")
+            selectors.add(mapping.selector)
+        return self
 
 
 class MatchReport(AzuratorModel):

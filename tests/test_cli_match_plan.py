@@ -60,15 +60,23 @@ def test_match_accepts_one_managed_dotenv_file_and_reports_assignments(
     result = CliRunner().invoke(app, ["match", "--env-file", str(source)])
 
     assert result.exit_code == 0
-    assert "Managed dotenv assignments" in result.stdout
+    assert "Dotenv assignments" in result.stdout
     assert "2 assignments" in result.stdout
     assert "secrets.env" in result.stdout
     assert "STORAGE_KEY" in result.stdout
     assert "SECOND_STORAGE_KEY" in result.stdout
-    assert "Plaintext dotenv file" in result.stdout
+    assert "Plaintext dotenv file" not in result.stdout
     assert "The dotenv file has broad permissions" not in result.stderr
     assert "must-not-render" not in result.output
     assert "also-secret" not in result.output
+
+    verbose = CliRunner().invoke(app, ["-v", "match", "--env-file", str(source)])
+
+    assert verbose.exit_code == 0
+    assert "Plaintext dotenv file" in verbose.stdout
+    assert "Compared" in verbose.stdout
+    assert "must-not-render" not in verbose.output
+    assert "also-secret" not in verbose.output
 
 
 def test_match_skip_azure_bindings_keeps_explicit_local_dotenv_bindings(
@@ -153,6 +161,7 @@ def test_match_help_does_not_infer_a_security_state() -> None:
 
     assert result.exit_code == 0
     assert "--stdin" in option_names
+    assert "--key-map-out" in option_names
     assert "--tokens-stdin" not in option_names
     assert "--input-format" not in option_names
     assert "compromised" not in result.output.casefold()
@@ -180,7 +189,7 @@ def test_match_renders_sparse_secret_free_results(monkeypatch: pytest.MonkeyPatc
     assert "Azure key matches" in result.stdout
     assert "2 matches" in result.stdout
     assert f"Subscription {SUBSCRIPTION_NAME} ({SUBSCRIPTION_ID})" in result.stdout
-    assert "Compared 3 input values with 2 Azure key slots across 1 key resource" in result.stdout
+    assert "Compared" not in result.stdout
     assert "STORAGE_KEY" in result.stdout
     assert "SECOND_STORAGE_KEY" in result.stdout
     assert "account-a" in result.stdout
@@ -188,23 +197,36 @@ def test_match_renders_sparse_secret_free_results(monkeypatch: pytest.MonkeyPatc
     assert "key2" in result.stdout
     assert "openai-a" in result.stdout
     assert "AI key access" in result.stdout
-    assert "Foundry key connections" in result.stdout
+    assert "Foundry connections" in result.stdout
     assert "Foundry project" in result.stdout
     assert "Connection name" in result.stdout
     assert "Target key resource" in result.stdout
     assert "Stored key slot" in result.stdout
     assert "storage-a" in result.stdout
     assert "project-a" in result.stdout
-    assert "AzureStorageAccount/AccountKey" in result.stdout
+    assert "AzureStorageAccount/AccountKey" not in result.stdout
     assert "AzureOpenAI/ApiKey" not in result.stdout
-    assert "Other Storage binding categories were not inspected" in result.stdout
-    assert "Running workloads were not tested" in " ".join(result.stdout.split())
+    assert "Other Storage binding categories were not inspected" not in result.stdout
+    assert "Running workloads were not tested" not in " ".join(result.stdout.split())
     assert "Known Foundry bindings" not in result.stdout
     assert "observe only" not in result.stdout
     assert "separate Azure objects" not in result.stdout
     assert "test workloads" not in result.stdout
     assert "must-not-render" not in result.stdout
     assert "/subscriptions/" not in result.stdout
+
+    verbose = CliRunner().invoke(
+        app,
+        ["-v", "match", "--stdin"],
+        input="TOKEN=must-not-render\n",
+    )
+
+    assert verbose.exit_code == 0
+    assert "Compared 3 input values with 2 Azure key slots across 1 key resource" in verbose.stdout
+    assert "AzureStorageAccount/AccountKey" in verbose.stdout
+    assert "Other Storage binding categories were not inspected" in verbose.stdout
+    assert "Running workloads were not tested" in " ".join(verbose.stdout.split())
+    assert "must-not-render" not in verbose.output
 
 
 def test_match_renders_app_service_setting_bindings_without_values(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -289,14 +311,27 @@ def test_match_renders_app_service_setting_bindings_without_values(monkeypatch: 
 
     assert result.exit_code == 0
     normalized = " ".join(result.stdout.split())
-    assert "App Service bindings · 2 matched settings" in normalized
+    assert "App Service settings · 2 matched settings" in normalized
     assert "example-app" in result.stdout
     assert "STORAGE_KEY" in normalized
     assert "STORAGE_ALIAS" in normalized
-    assert "Only exact whole application-setting values were inspected" in normalized
-    assert "restarts it and requires exclusive settings access" in normalized
+    assert "Only exact whole application-setting values were inspected" not in normalized
+    assert "restarts it and requires exclusive settings access" not in normalized
     assert "must-not-render" not in result.output
     assert app_id not in result.output
+
+    verbose = CliRunner().invoke(
+        app,
+        ["-v", "match", "--stdin"],
+        input="TOKEN=must-not-render\n",
+    )
+    verbose_normalized = " ".join(verbose.stdout.split())
+
+    assert verbose.exit_code == 0
+    assert "Only exact whole application-setting values were inspected" in verbose_normalized
+    assert "restarts it and requires exclusive settings access" in verbose_normalized
+    assert "must-not-render" not in verbose.output
+    assert app_id not in verbose.output
 
 
 def test_match_renders_optional_matrix(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -352,7 +387,8 @@ def test_match_does_not_claim_no_bindings_when_inspection_is_incomplete(
     )
 
     assert result.exit_code == 0
-    assert "No supported Foundry key connection was confirmed; inspection was incomplete" in result.stdout
+    assert "Credential-binding inspection was incomplete for account-a" in result.stdout
+    assert "No supported Foundry key connection was confirmed" not in result.stdout
     assert "No checked Foundry project connection targeted" not in result.stdout
     assert "must-not-render" not in result.stdout
 
@@ -381,6 +417,15 @@ def test_match_renders_complete_secret_free_json(monkeypatch: pytest.MonkeyPatch
     assert payload["bindings"][0]["management"] == "update-and-verify"
     assert "must-not-render" not in result.stdout
     assert "fingerprint" not in result.stdout
+
+    diagnostic = CliRunner().invoke(
+        app,
+        ["-vv", "match", "--stdin", "--json"],
+        input="TOKEN=must-not-render\n",
+    )
+    assert diagnostic.exit_code == 0
+    assert json.loads(diagnostic.stdout) == payload
+    assert "must-not-render" not in diagnostic.output
 
 
 def test_match_rejects_matrix_with_json_before_reading_values() -> None:
@@ -439,10 +484,21 @@ def test_plan_interactively_selects_exact_slots_without_input_selectors(
     assert inspected == [(KeySlotSelection(resource_id=make_inventory().resources[0].resource_id, key_slot="key1"),)]
     assert "Selected key slots" in result.stdout
     assert "Input selectors" not in result.stdout
-    assert "azurator rotate --plan" in " ".join(result.stdout.split())
+    assert "azurator rotate --plan" not in " ".join(result.stdout.split())
     assert "--stdin" not in result.stdout
-    assert "Plan scope: 1 Storage Account key slot selected on 1 key resource" in result.stdout
+    assert "Plan scope" not in result.stdout
     assert "Azure AI key" not in result.stdout
+
+    verbose_destination = tmp_path / "direct-plan-verbose.json"
+    verbose = CliRunner().invoke(
+        app,
+        ["-v", "plan", "--out", str(verbose_destination)],
+        input="1\n",
+    )
+
+    assert verbose.exit_code == 0
+    assert "azurator rotate --plan" in " ".join(verbose.stdout.split())
+    assert "Plan scope: 1 Storage Account key slot selected on 1 key resource" in verbose.stdout
 
 
 def test_plan_review_mentions_only_selected_ai_provider_and_binding_scope(
@@ -453,14 +509,24 @@ def test_plan_review_mentions_only_selected_ai_provider_and_binding_scope(
     result = CliRunner().invoke(app, ["plan"], input="1\n")
 
     assert result.exit_code == 0
-    assert "Rotation plan · review required" in result.stdout
-    assert "Plan scope: 1 Azure AI key slot selected on 1 key resource" in result.stdout
-    assert "AzureOpenAI/ApiKey" in result.stdout
-    assert "Other AI binding categories" in " ".join(result.stdout.split())
-    assert "workloads" in result.stdout
+    assert "Rotation plan · 1 key slot, 1 step" in result.stdout
+    assert "Azure bindings checked: Foundry project key connections" in result.stdout
+    assert "Plan scope" not in result.stdout
+    assert "AzureOpenAI/ApiKey" not in result.stdout
+    assert "Other AI binding categories" not in " ".join(result.stdout.split())
+    assert "workloads" not in result.stdout
     assert "Storage Account" not in result.stdout
     assert "AzureStorageAccount/AccountKey" not in result.stdout
-    assert "use 'azurator rotate' with the same selection to continue" in " ".join(result.stdout.split())
+    assert "use 'azurator rotate' with the same selection to continue" not in " ".join(result.stdout.split())
+
+    verbose = CliRunner().invoke(app, ["-v", "plan"], input="1\n")
+
+    assert verbose.exit_code == 0
+    assert "Plan scope: 1 Azure AI key slot selected on 1 key resource" in verbose.stdout
+    assert "AzureOpenAI/ApiKey" in verbose.stdout
+    assert "Other AI binding categories" in " ".join(verbose.stdout.split())
+    assert "workloads" in verbose.stdout
+    assert "Preview only. No plan file was written." in verbose.stdout
 
 
 def test_interactive_plan_keeps_picker_output_out_of_json_stdout(
@@ -551,14 +617,14 @@ def test_plan_writes_private_secret_free_json_and_renders_order(
         assert destination.stat().st_mode & 0o777 == 0o600
 
     assert "Rotation plan" in result.stdout
-    assert "review required" in result.stdout
+    assert "Rotation plan · 2 key slots, 6 steps" in result.stdout
     assert "Selected key slots" in result.stdout
     assert "Ordered steps" in result.stdout
     assert "Persist temporary bridge key" in result.stdout
     assert "Regenerate Azure key" in result.stdout
     assert " By " not in result.stdout
-    assert "No Azure resource was changed" in result.stdout
-    assert "azurator rotate --plan" in " ".join(result.stdout.split())
+    assert "No Azure resource was changed" not in result.stdout
+    assert "azurator rotate --plan" not in " ".join(result.stdout.split())
     assert "must-not-render" not in result.stdout
     assert "must-not-render" not in destination.read_text(encoding="utf-8")
     assert "fingerprint" not in destination.read_text(encoding="utf-8")
@@ -569,7 +635,7 @@ def test_plan_rejects_an_artifact_above_the_supported_size_before_writing(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     patch_plan_boundary(monkeypatch)
-    monkeypatch.setattr(cli_module, "_MAX_PLAN_ARTIFACT_BYTES", 1)
+    monkeypatch.setattr(cli_module, "_MAX_JSON_ARTIFACT_BYTES", 1)
     destination = tmp_path / "plan.json"
 
     result = CliRunner().invoke(
@@ -616,14 +682,15 @@ def test_plan_manages_a_dotenv_file_without_persisting_its_values(
     assert "dotenv-file-plaintext-at-rest" in {warning["code"] for warning in payload["warnings"]}
     assert "Managed dotenv file" in result.stdout
     assert source.name in result.stdout
-    assert "azurator rotate --plan" in " ".join(result.stdout.split())
+    assert result.stdout.count("may remain on a valid sibling key") == 1
+    assert "azurator rotate --plan" not in " ".join(result.stdout.split())
     assert "--stdin" not in result.stdout
     serialized = destination.read_text(encoding="utf-8")
     assert "must-not-render" not in serialized
     assert "also-must-not-render" not in serialized
 
 
-def test_dotenv_file_plan_preview_points_to_direct_rotate(
+def test_dotenv_file_plan_preview_is_compact_by_default_and_explained_when_verbose(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -635,9 +702,14 @@ def test_dotenv_file_plan_preview_points_to_direct_rotate(
     result = CliRunner().invoke(app, ["plan", "--env-file", str(source)])
 
     assert result.exit_code == 0
-    assert "Preview only; no plan file was written" in result.stdout
-    assert "use 'azurator rotate --env-file ...' to rematch the file and continue" in " ".join(result.stdout.split())
+    assert "Preview only" not in result.stdout
     assert "must-not-render" not in result.output
+
+    verbose = CliRunner().invoke(app, ["-v", "plan", "--env-file", str(source)])
+
+    assert verbose.exit_code == 0
+    assert "Preview only. No plan file was written." in verbose.stdout
+    assert "must-not-render" not in verbose.output
 
 
 def test_plan_refuses_to_overwrite_managed_dotenv_source(tmp_path: Path) -> None:
@@ -728,10 +800,19 @@ def test_plan_default_is_console_preview_without_a_file(monkeypatch: pytest.Monk
     assert result.exit_code == 0
     assert write_called is False
     assert "Rotation plan" in result.stdout
-    assert "Preview only; no plan file was written" in result.stdout
-    assert "rerun this streamed plan with --out" in result.stdout
+    assert "Preview only" not in result.stdout
+    assert "rerun this streamed plan with --out" not in result.stdout
     assert "Saved secret-free plan" not in result.stdout
     assert "must-not-render" not in result.stdout
+
+    verbose = CliRunner().invoke(
+        app,
+        ["-v", "plan", "--stdin"],
+        input="TOKEN=must-not-render\n",
+    )
+    assert verbose.exit_code == 0
+    assert "Preview only. No plan file was written." in verbose.stdout
+    assert "must-not-render" not in verbose.output
 
 
 def test_complete_no_match_is_rendered_and_serialized_as_no_changes(
@@ -771,8 +852,8 @@ def test_complete_no_match_is_rendered_and_serialized_as_no_changes(
 
     assert rendered.exit_code == 0
     assert "Rotation plan · no changes" in rendered.stdout
-    assert "No Azure key slot matched" in rendered.stdout
-    assert "not executable" in rendered.stdout
+    assert "No supplied value matched a supported Azure key slot" in rendered.stdout
+    assert "not executable" not in rendered.stdout
     assert "must-not-render" not in rendered.stdout
     assert structured.exit_code == 0
     assert json.loads(structured.stdout)["state"] == "no-changes"
@@ -823,7 +904,7 @@ def test_plan_does_not_present_failed_discovery_as_ready_no_match(monkeypatch: p
 
     assert result.exit_code == 0
     assert "Rotation plan · blocked" in result.stdout
-    assert "matching was incomplete" in result.stdout
+    assert "No executable rotation steps were generated" in result.stdout
     assert "No Azure key slot matched" not in result.stdout
     assert "Storage discovery failure" in result.stdout
     assert "must-not-render" not in result.stdout
@@ -943,6 +1024,6 @@ def test_plan_http_failure_is_redacted(monkeypatch: pytest.MonkeyPatch) -> None:
     )
 
     assert result.exit_code == 1
-    assert "response details were suppressed" in result.output
+    assert "Azure rotation planning failed" in result.output
     assert "must-not-render" not in result.output
     assert "another-secret" not in result.output

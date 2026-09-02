@@ -36,6 +36,18 @@ from tests.cli_test_support import (
 )
 
 
+def test_root_help_exposes_concise_output_controls() -> None:
+    result = CliRunner().invoke(app, ["--help"])
+
+    assert result.exit_code == 0
+    assert "Rotate shared keys for Azure services" in result.output
+    assert "--verbose" in result.output
+    assert "-v" in result.output
+    assert "Show inspection details" in result.output
+    assert "warning metadata" in result.output
+    assert "--quiet" not in result.output
+
+
 def test_discover_rejects_invalid_subscription_override() -> None:
     runner = CliRunner()
 
@@ -120,8 +132,8 @@ def test_discover_table_is_a_concise_human_summary(monkeypatch: pytest.MonkeyPat
     assert "westeurope" in result.stdout
     assert "Key authentication" in result.stdout
     assert "enabled" in result.stdout
-    assert "Notes" in result.stdout
-    assert "Coverage is limited to supported key-resource types" in result.stdout
+    assert "Details" not in result.stdout
+    assert "Coverage is limited to supported key-resource types" not in result.stdout
 
     assert "StorageV2" not in result.stdout
     assert "Azure resource IDs" not in result.stdout
@@ -170,7 +182,7 @@ def test_discover_table_includes_resources_with_key_authentication_disabled(
     assert "Key slots" not in result.stdout
 
 
-def test_discover_table_collapses_equivalent_provider_limitations(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_discover_verbose_collapses_equivalent_provider_limitations(monkeypatch: pytest.MonkeyPatch) -> None:
     warnings = (
         DiscoveryWarning(
             code="provider-coverage-limited",
@@ -213,7 +225,7 @@ def test_discover_table_collapses_equivalent_provider_limitations(monkeypatch: p
 
     result = CliRunner().invoke(
         app,
-        ["discover", "--subscription", SUBSCRIPTION_ID],
+        ["-v", "discover", "--subscription", SUBSCRIPTION_ID],
         terminal_width=180,
     )
 
@@ -247,6 +259,15 @@ def test_discover_table_keeps_actionable_provider_warnings(monkeypatch: pytest.M
     assert "Storage discovery permission" in result.stdout
     assert "Storage Account discovery failed with HTTP 403" in result.stdout
     assert "storage-discovery-forbidden" not in result.stdout
+
+    diagnostic = CliRunner().invoke(
+        app,
+        ["-vv", "discover", "--subscription", SUBSCRIPTION_ID],
+    )
+    assert diagnostic.exit_code == 0
+    assert "code=storage-discovery-forbidden" in diagnostic.stdout
+    assert "impact=blocking" in diagnostic.stdout
+    assert "category=contract" in diagnostic.stdout
 
 
 def test_native_login_failure_is_helpful_and_secret_free(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -287,12 +308,17 @@ def test_login_and_auth_status_render_safe_success(monkeypatch: pytest.MonkeyPat
     status_result = runner.invoke(app, ["auth", "status"])
 
     assert login_result.exit_code == 0
-    assert "Authenticated with browser in tenant tenant-id" in login_result.stdout
+    assert "Authenticated with browser" in login_result.stdout
+    assert "tenant-id" not in login_result.stdout
     assert SUBSCRIPTION_NAME in login_result.stdout
     assert SUBSCRIPTION_ID in login_result.stdout
     assert status_result.exit_code == 0
     assert "ready via device-code" in status_result.stdout
     assert f"{SUBSCRIPTION_NAME} ({SUBSCRIPTION_ID})" in status_result.stdout
+
+    verbose_login = runner.invoke(app, ["-v", "login", "--method", "browser"])
+    assert verbose_login.exit_code == 0
+    assert "in tenant tenant-id" in verbose_login.stdout
 
     json_result = runner.invoke(app, ["auth", "status", "--json"])
     assert json_result.exit_code == 0
@@ -362,7 +388,7 @@ def test_discover_reports_when_login_has_no_subscription(monkeypatch: pytest.Mon
         (CredentialUnavailableError("sensitive-detail"), "method is unavailable"),
         (ClientAuthenticationError("sensitive-detail"), "authentication failed"),
         (AuthConfigurationError("safe configuration message"), "safe configuration message"),
-        (RuntimeError("sensitive-detail"), "response details were suppressed"),
+        (RuntimeError("sensitive-detail"), "authentication failed"),
     ],
 )
 def test_authentication_errors_are_mapped_without_provider_details(
@@ -389,7 +415,7 @@ def test_discovery_http_failure_is_redacted(monkeypatch: pytest.MonkeyPatch) -> 
     result = CliRunner().invoke(app, ["discover", "--subscription", SUBSCRIPTION_ID])
 
     assert result.exit_code == 1
-    assert "response details were suppressed" in result.output
+    assert "Azure key-resource discovery failed" in result.output
     assert "do-not-render" not in result.output
 
 
@@ -437,6 +463,13 @@ def test_list_groups_supported_key_resources_and_bindings_without_authentication
     assert "--env-file" in result.stdout
     assert "SOPS-encrypted dotenv assignments" in result.stdout
     assert "--sops-file" in result.stdout
+    assert "Supports discovery, matching, export, and rotation" not in result.stdout
+    assert "Supports inspection, update, and verification" not in result.stdout
+
+    verbose = CliRunner().invoke(app, ["-v", "list"])
+    assert verbose.exit_code == 0
+    assert "Supports discovery, matching, export, and rotation" in verbose.stdout
+    assert "Supports inspection, update, and verification" in verbose.stdout
 
 
 @pytest.mark.parametrize(

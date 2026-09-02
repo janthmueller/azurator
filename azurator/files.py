@@ -1,4 +1,4 @@
-"""Restricted, atomic writes for sensitive operational metadata."""
+"""Restricted, bounded file operations for local artifacts and managed secrets."""
 
 from __future__ import annotations
 
@@ -254,6 +254,22 @@ def read_private_text(path: Path, *, max_bytes: int = 1_048_576) -> str:
 
     source = path.expanduser()
     with open_private_text(source, max_bytes=max_bytes) as stream:
+        content = stream.read(max_bytes + 1)
+    if len(content.encode("utf-8")) > max_bytes:
+        raise UnsafeInputPathError(f"input exceeds the {max_bytes}-byte safety limit: {source}")
+    return content
+
+
+def read_regular_text(path: Path, *, max_bytes: int = 1_048_576) -> str:
+    """Read one bounded regular UTF-8 file without following its final component."""
+
+    source = path.expanduser()
+    with _open_regular_text(
+        source,
+        max_bytes=max_bytes,
+        require_private_permissions=False,
+        require_current_owner=False,
+    ) as stream:
         content = stream.read(max_bytes + 1)
     if len(content.encode("utf-8")) > max_bytes:
         raise UnsafeInputPathError(f"input exceeds the {max_bytes}-byte safety limit: {source}")

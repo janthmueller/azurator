@@ -15,6 +15,8 @@ readonly STORAGE_ACCOUNT_ID="/subscriptions/$SUBSCRIPTION_ID/resourceGroups/rg-a
 readonly DISABLED_STORAGE_ACCOUNT_ID="/subscriptions/$SUBSCRIPTION_ID/resourceGroups/rg-azurator-live-test/providers/Microsoft.Storage/storageAccounts/stazuratordisabled"
 readonly OPENAI_ACCOUNT_ID="/subscriptions/$SUBSCRIPTION_ID/resourceGroups/rg-azurator-live-test/providers/Microsoft.CognitiveServices/accounts/aoai-azurator-test"
 readonly DISABLED_FOUNDRY_ACCOUNT_ID="/subscriptions/$SUBSCRIPTION_ID/resourceGroups/rg-azurator-live-test/providers/Microsoft.CognitiveServices/accounts/ai-azurator-disabled"
+readonly SCOPE_FILE="$TEST_ROOT/live-test.env"
+readonly WRONG_SCOPE_FILE="$TEST_ROOT/wrong-live-test.env"
 
 cleanup() {
   rm -rf -- "$TEST_ROOT"
@@ -35,7 +37,11 @@ new_case() {
 run_e2e() {
   local mode="$1"
   local root="$2"
+  local scope_file="$SCOPE_FILE"
   shift 2
+  if [[ "$mode" == "scope-mismatch" ]]; then
+    scope_file="$WRONG_SCOPE_FILE"
+  fi
   FAKE_MODE="$mode" \
     FAKE_ROOT="$root" \
     FAKE_LOG="$root/calls.log" \
@@ -47,6 +53,7 @@ run_e2e() {
     AZURATOR_LIVE_TEST_SOPS="$(command -v sops)" \
     AZURATOR_LIVE_TEST_AZURATOR="$TEST_BIN/azurator" \
     AZURATOR_LIVE_TEST_LIFECYCLE="$TEST_BIN/lifecycle" \
+    AZURATOR_LIVE_TEST_SCOPE_FILE="$scope_file" \
     "$BASH" "$E2E_SCRIPT" "$@"
 }
 
@@ -110,9 +117,28 @@ create_driver_wrapper() {
 trap cleanup EXIT
 
 mkdir -p "$TEST_BIN"
+printf 'AZURATOR_LIVE_TEST_SUBSCRIPTION_ID=%s\n' "$SUBSCRIPTION_ID" >"$SCOPE_FILE"
+printf 'AZURATOR_LIVE_TEST_SUBSCRIPTION_ID=%s\n' \
+  "22222222-2222-2222-2222-222222222222" >"$WRONG_SCOPE_FILE"
 create_driver_wrapper az
 create_driver_wrapper azurator
 create_driver_wrapper lifecycle
+
+scope_mismatch_root="$(new_case scope-mismatch)"
+if run_e2e scope-mismatch "$scope_mismatch_root" \
+  >"$scope_mismatch_root/output.log" 2>&1; then
+  fail "a live-test subscription outside the local allowlist returned success"
+fi
+[[ ! -e "$scope_mismatch_root/group-exists" ]] \
+  || fail "a subscription outside the local allowlist reached fixture deployment"
+assert_empty_tmp "$scope_mismatch_root"
+assert_no_secret_output "$scope_mismatch_root"
+grep -Fq "is not allowed by the local live-test subscription allowlist" \
+  "$scope_mismatch_root/output.log" \
+  || fail "the subscription allowlist mismatch did not fail with a fixed explanation"
+if grep -Eq '^(azurator|lifecycle) ' "$scope_mismatch_root/calls.log"; then
+  fail "a subscription allowlist mismatch reached Azurator or the fixture lifecycle"
+fi
 
 success_root="$(new_case success)"
 run_e2e success "$success_root" >"$success_root/output.log" 2>&1
@@ -125,8 +151,14 @@ grep -Fq "azurator export" "$success_root/calls.log" || fail "export was not exe
 grep -Fq "azurator export --subscription $SUBSCRIPTION_ID --select $STORAGE_ACCOUNT_ID#key1 --select $STORAGE_ACCOUNT_ID#key2 --select $OPENAI_ACCOUNT_ID#Key1 --sops-out" \
   "$success_root/calls.log" \
   || fail "managed export did not select both Storage slots and Azure OpenAI Key1"
-[[ "$(grep -Fc -- '--sops-out' "$success_root/calls.log")" -eq 1 ]] \
-  || fail "the managed key set was not exported directly to SOPS exactly once"
+grep -Eq "^azurator match --subscription $SUBSCRIPTION_ID --sops-file .* --key-map-out .*/azurator\.keys\.json$" \
+  "$success_root/calls.log" \
+  || fail "the reusable key map was not created from the managed SOPS file"
+grep -Eq "^azurator export --subscription $SUBSCRIPTION_ID --key-map .*/azurator\.keys\.json --sops-out .*/recreated\.enc\.env$" \
+  "$success_root/calls.log" \
+  || fail "the reusable key map did not drive a new SOPS export"
+[[ "$(grep -Fc -- '--sops-out' "$success_root/calls.log")" -eq 2 ]] \
+  || fail "the selected and key-map exports did not each create one SOPS file"
 [[ "$(grep -Fc -- ' --out ' "$success_root/calls.log")" -eq 1 ]] \
   || fail "plaintext export was used beyond the temporary skipped-binding snapshot"
 grep -Fq "azurator discover --subscription $SUBSCRIPTION_ID --json" "$success_root/calls.log" \
@@ -141,10 +173,10 @@ grep -Fq "azurator match --subscription $SUBSCRIPTION_ID --env-file" "$success_r
   || fail "the pre-rotation snapshot was not checked after skipped-binding rotation"
 [[ "$(grep -Fc -- '--env-file' "$success_root/calls.log")" -eq 1 ]] \
   || fail "plaintext dotenv was used beyond the temporary skipped-binding snapshot"
-[[ "$(grep -Fc -- 'azurator match --subscription' "$success_root/calls.log")" -eq 3 ]] \
-  || fail "the workflow did not run one snapshot match and two SOPS matches"
-[[ "$(grep -Fc -- '--sops-file' "$success_root/calls.log")" -eq 4 ]] \
-  || fail "the workflow did not run SOPS match, plan, rotation, and final match exactly once"
+[[ "$(grep -Fc -- 'azurator match --subscription' "$success_root/calls.log")" -eq 4 ]] \
+  || fail "the workflow did not run one snapshot match and three SOPS matches"
+[[ "$(grep -Fc -- '--sops-file' "$success_root/calls.log")" -eq 5 ]] \
+  || fail "the workflow did not run key-map match, structured match, plan, rotation, and final match"
 grep -Fq "azurator plan --subscription $SUBSCRIPTION_ID --sops-file" "$success_root/calls.log" \
   || fail "the structured SOPS plan was not exercised"
 grep -Fq "azurator rotate --subscription $SUBSCRIPTION_ID --sops-file" "$success_root/calls.log" \
@@ -170,6 +202,9 @@ grep -Fq "Verified enabled and disabled key-authentication resources" "$success_
 grep -Fq "Verified that direct skipped-binding rotation changed only the selected fixture key" \
   "$success_root/output.log" \
   || fail "the successful workflow did not report verified skipped-binding rotation"
+grep -Fq "Verified the reusable key map and recreated exactly six encrypted Azure assignments" \
+  "$success_root/output.log" \
+  || fail "the successful workflow did not report verified key-map recreation"
 
 reuse_root="$(new_case reuse-fixture)"
 : >"$reuse_root/group-exists"
@@ -261,6 +296,54 @@ assert_empty_tmp "$skip_failure_root"
 assert_no_secret_output "$skip_failure_root"
 if grep -Fq "storageAccounts/stazuratortest#key1" "$skip_failure_root/calls.log"; then
   fail "a failed skipped-binding rotation continued into managed export"
+fi
+
+bad_key_map_root="$(new_case bad-key-map)"
+if run_e2e bad-key-map "$bad_key_map_root" >"$bad_key_map_root/output.log" 2>&1; then
+  fail "an invalid reusable key map returned success"
+fi
+[[ -e "$bad_key_map_root/group-exists" ]] \
+  || fail "the invalid key map did not retain its diagnostic fixture"
+assert_empty_tmp "$bad_key_map_root"
+assert_no_secret_output "$bad_key_map_root"
+grep -Fq "reusable key map did not preserve the exact matched selectors and slots" \
+  "$bad_key_map_root/output.log" \
+  || fail "the invalid reusable key map did not fail closed"
+if grep -Fq "azurator export --subscription $SUBSCRIPTION_ID --key-map" \
+  "$bad_key_map_root/calls.log"; then
+  fail "an invalid reusable key map reached map-driven export"
+fi
+if grep -Fq "azurator plan --subscription $SUBSCRIPTION_ID --sops-file" \
+  "$bad_key_map_root/calls.log"; then
+  fail "an invalid reusable key map reached managed planning"
+fi
+if grep -Fq "azurator rotate --subscription $SUBSCRIPTION_ID --sops-file" \
+  "$bad_key_map_root/calls.log"; then
+  fail "an invalid reusable key map reached managed rotation"
+fi
+
+bad_key_map_export_root="$(new_case bad-key-map-export)"
+if run_e2e bad-key-map-export "$bad_key_map_export_root" \
+  >"$bad_key_map_export_root/output.log" 2>&1; then
+  fail "an invalid map-driven SOPS export returned success"
+fi
+[[ -e "$bad_key_map_export_root/group-exists" ]] \
+  || fail "the invalid map-driven export did not retain its diagnostic fixture"
+assert_empty_tmp "$bad_key_map_export_root"
+assert_no_secret_output "$bad_key_map_export_root"
+grep -Fq "key-map SOPS export did not preserve its exact alias-only contract" \
+  "$bad_key_map_export_root/output.log" \
+  || fail "the invalid map-driven SOPS export did not fail closed"
+grep -Fq "azurator export --subscription $SUBSCRIPTION_ID --key-map" \
+  "$bad_key_map_export_root/calls.log" \
+  || fail "the invalid map-driven SOPS export did not reach its verification boundary"
+if grep -Fq "azurator plan --subscription $SUBSCRIPTION_ID --sops-file" \
+  "$bad_key_map_export_root/calls.log"; then
+  fail "an invalid map-driven SOPS export reached managed planning"
+fi
+if grep -Fq "azurator rotate --subscription $SUBSCRIPTION_ID --sops-file" \
+  "$bad_key_map_export_root/calls.log"; then
+  fail "an invalid map-driven SOPS export reached managed rotation"
 fi
 
 bad_sops_match_root="$(new_case bad-sops-match)"

@@ -2,6 +2,12 @@
 
 set -euo pipefail
 
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+readonly SCRIPT_DIR
+# The shared guard is checked separately.
+# shellcheck disable=SC1091
+source "$SCRIPT_DIR/scope.sh"
+
 readonly RESOURCE_GROUP_NAME="rg-azurator-live-test"
 readonly DEPLOYMENT_LOCATION="westeurope"
 readonly EXPECTED_FIXTURE_TAG="live-test"
@@ -34,6 +40,7 @@ load_account() {
 
   [[ "$SUBSCRIPTION_ID" =~ ^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$ ]] \
     || fail "Azure CLI returned an invalid subscription ID"
+  require_live_test_subscription_allowed "$SUBSCRIPTION_ID" || exit 1
   [[ "$AZURE_ENVIRONMENT" == "AzureCloud" ]] \
     || fail "the reviewed live-test fixture supports Azure public cloud only"
 
@@ -295,6 +302,7 @@ main() {
   }
 
   require_fixture_paths
+  load_live_test_subscription_allowlist || exit 1
   load_account
 
   case "$command" in

@@ -19,6 +19,7 @@ surface described in [product behavior](../product/behavior.md). It covers:
 - Foundry, App Service, plaintext dotenv, and SOPS dotenv binding inspection
   and updates;
 - exclusive plaintext and verified SOPS-encrypted dotenv export;
+- secret-free reusable key-map creation and map-driven export;
 - generated plans, confirmed rotation, retained operations, and resume.
 
 The model protects retrievable, high-entropy Azure-generated account keys. It
@@ -52,6 +53,7 @@ an explicitly selected local plaintext or SOPS dotenv binding.
 - age private identities used by SOPS
 - the integrity of generated plans and transient operations
 - subscription, tenant, resource, credential-binding, and document-path metadata
+- key-map selector, subscription, resource-ID, and slot metadata
 
 Plans and operations contain no usable key values, but they remain sensitive
 because they map infrastructure relationships and resource identifiers.
@@ -126,7 +128,11 @@ account keys that existed around a rotation.
    Only installed reviewed key-reading providers may supply values. The
    destination is created atomically and exclusively with mode `0600`; existing
    or concurrently appearing paths are never replaced. Values are never sent to
-   stdout, and cancellation or failure leaves no destination.
+   stdout, and cancellation or failure leaves no destination. Selection may
+   instead come from one strict, secret-free key map. The active subscription
+   must match its recorded scope, and every exact mapping is resolved against
+   the current inventory before key retrieval. Aliases may share a slot, but
+   unlisted sibling slots are never inferred.
 9. **Managed SOPS boundary.** SOPS and its configured key backends manage
    encryption at rest and recipient metadata. Azurator accepts only the reviewed
    SOPS 3.13.x dotenv status/decrypt/set command shapes. The source must be one
@@ -164,6 +170,9 @@ not by deleting fields from serialized operation JSON. It may show the bounded
 error code but never the stored error message, embedded full plan, resource IDs,
 binding paths, salt, or recovery fingerprints. Invalid entries are identified
 only by their canonical directory UUID; their contents are never rendered.
+The repeatable human-output verbosity option only reveals secret-free scope and
+diagnostic metadata. It never relaxes redaction or changes structured JSON,
+which remains complete at every verbosity level.
 
 ### Secret disclosure through development build inputs
 
@@ -223,6 +232,14 @@ the plan carries a confirmation-impact warning. A managed `--env-file` or
 `--sops-file` is attached afterward as an explicit local binding. Saved-plan
 and resume paths repeat the recorded mode rather than accepting a new
 inspection choice.
+
+A key map is data, not authority to broaden Azure scope. Loading it never signs
+in, switches subscriptions, or retrieves a key. Map-driven export requires the
+already selected subscription to match, resolves every mapped resource and
+exact slot through current metadata, displays the resulting intent, and uses the
+same confirmation and reviewed key-reading providers as other export modes. A
+modified map can change requested selectors or resources within that scope, so
+users must review it like other version-controlled infrastructure metadata.
 
 ### Unintended mutation
 
@@ -390,11 +407,11 @@ Export is an explicit bootstrap path, not a discovery output format. `--out` is
 required and stdout is never a secret sink. Before any key-returning call,
 Azurator resolves the existing parent while preserving the final component,
 rejects an existing destination, validates every picker-, repeatable-`--select`-,
-or `--all`-selected resource/slot/selector mapping against the complete metadata
-inventory and installed reviewed providers, displays the mapping plus a
-plaintext warning, and asks for confirmation unless `--yes` was given. `--all`
-means every retrievable slot displayed by those providers in the one selected
-subscription, not every Azure secret.
+`--all`-, or key-map-selected resource/slot/selector mapping against the
+complete metadata inventory and installed reviewed providers, displays the
+mapping plus a plaintext warning, and asks for confirmation unless `--yes` was
+given. `--all` means every retrievable slot displayed by those providers in the
+one selected subscription, not every Azure secret.
 
 After confirmation, the exact reviewed pair for each selected resource is read
 once and only selected slots are retained in the canonical single-quoted dotenv
@@ -406,11 +423,24 @@ dotenv contract, retrieval failure, write failure, and a destination race all
 leave no destination. Export does not merge, append, overwrite, create a plan
 or recovery operation, encrypt content, or infer application-specific selector names.
 
-The resulting file is plaintext at rest and becomes the user's responsibility.
-Its deterministic selectors identify provider, resource name, and slot, with a
-numeric suffix if names collide. A later `--env-file` workflow may manage it,
-but export itself does not rotate a key, inspect bindings, or verify that any
-workload reads the file.
+`match --key-map-out` is the explicit path for preserving application-specific
+selector names. It stores only confirmed, unambiguous
+selector-to-resource-and-slot metadata, never a value, reusable digest, source
+path, or matching-session state. An empty or ambiguous result creates no map.
+The output is written atomically with mode `0600` on POSIX, while loading
+deliberately accepts ordinary regular non-symlink repository files because the
+artifact is secret-free. Duplicate JSON member names are rejected at every
+object level. Canonical subscription scope, dotenv selectors, complete top-level
+ARM IDs, embedded resource subscription, and slot-name syntax are validated
+before Azure access. Resource IDs and selector names can still reveal operational
+context.
+
+An `export --out` destination is plaintext at rest and becomes the user's
+responsibility. Interactive, `--select`, and `--all` exports use deterministic
+selectors derived from provider, resource name, and slot, with a numeric suffix
+if names collide. A key-map export instead preserves its recorded selectors. A
+later `--env-file` workflow may manage the destination, but export itself does
+not rotate a key, inspect bindings, or verify that any workload reads the file.
 
 ### Plaintext leakage during SOPS dotenv export
 
@@ -502,6 +532,9 @@ identity backend, or host remains outside the protection boundary.
   decrypt identity. Azurator does not manage recipients, merge or replace an
   existing document, or hide dotenv selector names and SOPS metadata that remain
   visible in ciphertext.
+- A key map can recreate only its mapped Azure key assignments. It cannot
+  reconstruct unrelated dotenv values or SOPS recipient configuration. Sharing
+  it also shares subscription, resource-ID, slot, and selector metadata.
 - The current Foundry data-plane endpoint allowlist covers Azure public cloud;
   unsupported cloud endpoint suffixes are reported as inspection gaps.
 - Microsoft does not currently publish the Foundry data-plane `AccountKey`
@@ -538,8 +571,9 @@ identity backend, or host remains outside the protection boundary.
 
 ## Review gates
 
-The Storage/Cognitive/Foundry/App-Service/plaintext-dotenv/SOPS-dotenv rotation slice and private plaintext or SOPS dotenv
-export are limited to their reviewed plan, file, failure, redaction, provider,
-and drift contracts. Any new rotating provider, credential-binding category, workload
-verifier, or secret output must pass the same review and negative-path tests
-before registration. No live Azure mutation belongs in automated tests.
+The Storage/Cognitive/Foundry/App-Service/plaintext-dotenv/SOPS-dotenv rotation
+slice, key maps, and private plaintext or SOPS dotenv export are limited to
+their reviewed plan, file, failure, redaction, provider, and drift contracts.
+Any new rotating provider, credential-binding category, workload verifier, or
+secret output must pass the same review and negative-path tests before
+registration. No live Azure mutation belongs in automated tests.

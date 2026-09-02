@@ -93,8 +93,32 @@ def test_match_sops_file_keeps_local_binding_when_azure_bindings_are_skipped(
 
     readable = CliRunner().invoke(app, ["match", "--sops-file", str(source)])
     assert readable.exit_code == 0
-    assert "Managed SOPS dotenv assignments" in readable.stdout
+    assert "SOPS dotenv assignments" in readable.stdout
     assert source.name in readable.stdout
+
+
+def test_match_sops_file_writes_only_portable_key_map_metadata(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = _source(tmp_path)
+    destination = tmp_path / "azurator.keys.json"
+    _patch_sops_boundary(monkeypatch, source)
+
+    result = CliRunner().invoke(
+        app,
+        ["match", "--sops-file", str(source), "--key-map-out", str(destination)],
+    )
+
+    assert result.exit_code == 0
+    payload = json.loads(destination.read_text(encoding="utf-8"))
+    assert payload["subscription_id"] == SUBSCRIPTION_ID
+    assert [mapping["selector"] for mapping in payload["mappings"]] == [
+        "STORAGE_KEY",
+        "SECOND_STORAGE_KEY",
+    ]
+    assert str(source) not in destination.read_text(encoding="utf-8")
+    assert "source_path" not in payload
 
 
 def test_plan_sops_file_persists_exact_encrypted_source_contract(
@@ -114,7 +138,8 @@ def test_plan_sops_file_persists_exact_encrypted_source_contract(
     assert {binding.provider for binding in plan.bindings if binding.location.value == "local"} == {
         "local-sops-dotenv-file"
     }
-    assert "SOPS-encrypted dotenv file" in result.stdout
+    assert "Managed SOPS dotenv file" in result.stdout
+    assert result.stdout.count("may remain on a valid sibling key") == 1
     assert "plan-input-secret" not in destination.read_text(encoding="utf-8")
 
 
@@ -133,7 +158,7 @@ def test_direct_and_saved_plan_sops_rotation_use_the_same_plan_model(
 
     monkeypatch.setattr(cli_module, "_execution_service", direct_execution_service)
 
-    direct = CliRunner().invoke(app, ["rotate", "--sops-file", str(source), "--yes"])
+    direct = CliRunner().invoke(app, ["-v", "rotate", "--sops-file", str(source), "--yes"])
 
     assert direct.exit_code == 0
     assert direct_service.started

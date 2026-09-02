@@ -58,7 +58,9 @@ Azurator can identify, update, and verify these stored key copies:
   SOPS-encrypted dotenv file.
 
 Export can exclusively create one new plaintext or SOPS-encrypted dotenv file
-from selected retrievable slots. It does not merge or replace a file.
+from selected retrievable slots. A secret-free key map can preserve confirmed
+dotenv selector-to-resource-and-slot mappings and drive a later export. Export
+does not merge or replace a file.
 
 Use three distinct domain terms throughout the implementation:
 
@@ -108,6 +110,30 @@ pinned or versioned.
 The running `azurator COMMAND --help` surface defines exact option names and
 accepted combinations. This section records the behavior behind those options.
 
+### Human output detail
+
+Human output has three secret-safe detail levels selected by the repeatable
+root option before a command:
+
+- normal output presents results, exact mutation intent, progress, failures,
+  and facts that affect confirmation or execution;
+- `-v` adds inspection scope, comparison counts, empty inspected binding
+  categories, file mechanics, and local recovery lifecycle details;
+- `-vv` additionally appends stable warning code, impact, category, provider,
+  resource, and binding identifiers to rendered provider warnings when present.
+
+The normal level avoids repeating static key-resource coverage limitations
+after every successful command. Confirmation-relevant Azure binding scope
+remains visible either as a concrete warning or as a compact positive statement
+of what was checked. Blocking warnings, skipped Azure binding inspection, App
+Service restart/concurrency warnings, and cleanup failures are never hidden by
+the normal level. Plan and rotate also keep managed-file interruption state
+visible.
+
+Verbosity never permits raw keys, request or response bodies, stored error
+messages, fingerprints, or tracebacks to cross the output boundary. Structured
+`--json` output remains complete and identical at every verbosity level.
+
 ### Support catalog
 
 `list` is login-free and projects the reviewed built-in contracts into separate
@@ -120,9 +146,13 @@ authorization and execution boundary and are not flattened into one public list.
 ### Export
 
 `export` crosses the key-retrieval boundary without mutating Azure. It first
-performs metadata-only discovery, then uses a terminal
-picker, repeatable exact `--select`, or explicit `--all` to produce a complete
-secret-free resource/slot/selector intent. It validates that `--out` names a new
+performs metadata-only discovery, then uses a terminal picker, repeatable exact
+`--select`, explicit `--all`, or one strict key map to produce a complete
+secret-free resource/slot/selector intent. A key map must match the already
+selected subscription and is mutually exclusive with the other selection
+modes. Its exact selectors, resources, and slots are resolved against the
+current inventory; repeated resource/slot identities intentionally preserve
+aliases. It validates that `--out` names a new
 plaintext file or `--sops-out` names a new encrypted file beneath an existing
 resolved parent and confirms the displayed intent before retrieving any key.
 Exactly one output option is required and filenames never select the mode
@@ -145,7 +175,13 @@ values arrive through stdin, one explicit user-owned `--env-file`, or in-memory
 decryption of one explicit `--sops-file`. They become per-run HMAC fingerprints
 and are compared with provider candidates in constant time. Its default output
 is a sparse match list; the optional matrix uses input selectors as rows and
-Azure resources, not provider implementations, as columns.
+Azure resources, not provider implementations, as columns. Explicit
+`--key-map-out` atomically writes a strict key-map JSON artifact containing only
+confirmed, unambiguous selector, complete ARM resource ID, and exact slot
+mappings. It fails rather than creating an empty or ambiguous map. Unmatched and
+empty assignments are not included. The map contains no values, fingerprints,
+source path, generated timestamp, provider output, binding data, or warning
+history. Loading rejects duplicate JSON member names at every object level.
 
 ### Metadata inventory
 
@@ -352,14 +388,16 @@ azurator export --out selected-keys.env
 azurator export --sops-out selected-keys.enc.env
 azurator export --select '<arm-resource-id>#key1' --out selected-keys.env
 azurator export --all --sops-out selected-keys.enc.env
+azurator match --sops-file existing.enc.env --key-map-out azurator.keys.json
+azurator export --key-map azurator.keys.json --sops-out recreated.enc.env
 ```
 
-Without `--select` or `--all`, a controlling-terminal picker lists retrievable
-slots from the metadata-only inventory. Repeatable `--select` chooses exact
-slots without a terminal. `--all` selects every slot displayed by installed
-reviewed providers in the one selected subscription; it does not mean every
-Azure secret. Deterministic selectors are derived from provider, resource name,
-and slot, with stable numeric suffixes for collisions. Azurator resolves the
+Without `--select`, `--all`, or `--key-map`, a controlling-terminal picker lists
+retrievable slots from the metadata-only inventory. Repeatable `--select`
+chooses exact slots without a terminal. `--all` selects every slot displayed by
+installed reviewed providers in the one selected subscription; it does not mean
+every Azure secret. Deterministic selectors are derived from provider, resource
+name, and slot, with stable numeric suffixes for collisions. Azurator resolves the
 existing parent without following a final destination component, rejects any
 existing target, displays the full secret-free mapping and mode-specific
 warning, and confirms before it constructs key-reading clients or calls
@@ -380,6 +418,19 @@ text, SOPS or round-trip failure, and file failure produce no destination.
 Values never reach stdout, logs, plans, operations, exception messages, ordinary
 arguments, or a plaintext temporary. Neither mode supports merge, append, or
 overwrite.
+
+The alternative `--key-map` selection mode loads one bounded, regular,
+non-symlink JSON artifact. The map schema contains only its version, one
+subscription ID, and one or more selector, complete key-resource ARM ID, and
+slot mappings. Before Azure access it validates the canonical subscription UUID,
+dotenv selectors, complete top-level ARM ID shape, each ID's embedded
+subscription, and key-slot name syntax. Selectors are unique, while multiple
+selectors may intentionally refer to one slot. The selected login subscription
+must match the artifact; Azurator never switches scope from the map. Every
+resource and slot is resolved against fresh metadata and the current reviewed
+retrievable-key contract before confirmation or key retrieval. Export retrieves
+each mapped resource once and renders the mappings in artifact order. It neither
+adds sibling slots nor reconstructs unmatched or unrelated dotenv assignments.
 
 The implemented plaintext mode uses one existing dotenv file as both matching
 source and managed configuration record:

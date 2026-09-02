@@ -2,6 +2,12 @@
 
 set -euo pipefail
 
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+readonly SCRIPT_DIR
+# The shared guard is checked separately.
+# shellcheck disable=SC1091
+source "$SCRIPT_DIR/scope.sh"
+
 readonly RESOURCE_GROUP_NAME="rg-azurator-live-test"
 readonly EXPECTED_FIXTURE_TAG="live-test"
 readonly EXPECTED_OWNER_TAG="azurator-repository"
@@ -162,6 +168,90 @@ validate_sops_document() {
   fi
 }
 
+validate_key_map() {
+  local path="$1"
+  local storage_selector="$2"
+  local storage_secondary_selector="$3"
+  local openai_selector="$4"
+
+  [[ -f "$path" && ! -L "$path" && "$(stat -c '%a' "$path")" == "600" ]] \
+    || fail "the reusable key map did not satisfy the private regular-file contract"
+
+  # jq variables, not shell variables, are intentionally expanded here.
+  # shellcheck disable=SC2016
+  if ! "$JQ_BIN" -e \
+    --arg subscription_id "$SUBSCRIPTION_ID" \
+    --arg storage_id "$STORAGE_ACCOUNT_ID" \
+    --arg openai_id "$OPENAI_ACCOUNT_ID" \
+    --arg storage "$storage_selector" \
+    --arg storage_alias "$STORAGE_LOCAL_ALIAS" \
+    --arg storage_secondary "$storage_secondary_selector" \
+    --arg storage_secondary_alias "$STORAGE_SECONDARY_LOCAL_ALIAS" \
+    --arg openai "$openai_selector" \
+    --arg openai_alias "$OPENAI_LOCAL_ALIAS" \
+    '
+      (keys | sort) == ["mappings", "schema_version", "subscription_id"]
+      and .schema_version == "1"
+      and .subscription_id == $subscription_id
+      and (.mappings | sort_by(.selector)) == (
+        [
+          {selector: $storage, key_resource_id: $storage_id, key_slot: "key1"},
+          {selector: $storage_secondary, key_resource_id: $storage_id, key_slot: "key2"},
+          {selector: $openai, key_resource_id: $openai_id, key_slot: "Key1"},
+          {selector: $storage_alias, key_resource_id: $storage_id, key_slot: "key1"},
+          {selector: $storage_secondary_alias, key_resource_id: $storage_id, key_slot: "key2"},
+          {selector: $openai_alias, key_resource_id: $openai_id, key_slot: "Key1"}
+        ]
+        | sort_by(.selector)
+      )
+    ' "$path" >/dev/null; then
+    fail "the reusable key map did not preserve the exact matched selectors and slots"
+  fi
+}
+
+validate_mapped_sops_document() {
+  local path="$1"
+  local storage_selector="$2"
+  local storage_secondary_selector="$3"
+  local openai_selector="$4"
+  local status_json
+  status_json="$("$SOPS_BIN" filestatus --input-type dotenv "$path")"
+  "$JQ_BIN" -e '. == {"encrypted": true}' >/dev/null <<<"$status_json" \
+    || fail "the key-map export did not satisfy the SOPS-encrypted dotenv contract"
+
+  # jq receives decrypted values only through the pipe and emits nothing.
+  # shellcheck disable=SC2016
+  if ! "$SOPS_BIN" decrypt --input-type dotenv --output-type json "$path" \
+    | "$JQ_BIN" -e \
+      --arg storage "$storage_selector" \
+      --arg storage_alias "$STORAGE_LOCAL_ALIAS" \
+      --arg storage_secondary "$storage_secondary_selector" \
+      --arg storage_secondary_alias "$STORAGE_SECONDARY_LOCAL_ALIAS" \
+      --arg openai "$openai_selector" \
+      --arg openai_alias "$OPENAI_LOCAL_ALIAS" \
+      '
+        (keys | sort) == (
+          [
+            $storage,
+            $storage_alias,
+            $storage_secondary,
+            $storage_secondary_alias,
+            $openai,
+            $openai_alias
+          ]
+          | sort
+        )
+        and (.[$storage] | type == "string" and length > 0)
+        and .[$storage_alias] == .[$storage]
+        and (.[$storage_secondary] | type == "string" and length > 0)
+        and .[$storage_secondary_alias] == .[$storage_secondary]
+        and (.[$openai] | type == "string" and length > 0)
+        and .[$openai_alias] == .[$openai]
+      ' >/dev/null; then
+    fail "the key-map SOPS export did not preserve its exact alias-only contract"
+  fi
+}
+
 remove_workspace() {
   local workspace="$E2E_WORKSPACE"
   [[ -n "$workspace" ]] || return
@@ -205,6 +295,7 @@ load_account_scope() {
 
   [[ "$SUBSCRIPTION_ID" =~ ^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$ ]] \
     || fail "Azure CLI returned an invalid subscription ID"
+  require_live_test_subscription_allowed "$SUBSCRIPTION_ID" || exit 1
   [[ "$AZURE_ENVIRONMENT" == "AzureCloud" ]] \
     || fail "the reviewed live-test workflow supports Azure public cloud only"
 }
@@ -1059,7 +1150,7 @@ verify_unrelated_app_setting() {
 
 main() {
   local exists before_file_state after_file_state discovery_report_json match_report_json
-  local age_identity age_recipient managed_sops openai_selector plan_report_json
+  local age_identity age_recipient key_map managed_sops mapped_sops openai_selector plan_report_json
   local skip_match_report_json skip_plan_json skip_rotation_state skip_snapshot storage_selector
   local storage_secondary_selector
   local -a exported_selectors
@@ -1072,6 +1163,7 @@ main() {
     exit 2
   fi
   require_runtime
+  load_live_test_subscription_allowlist || exit 1
   load_account_scope
 
   printf '%s\n' \
@@ -1137,6 +1229,8 @@ main() {
   chmod 700 "$E2E_WORKSPACE"
   skip_snapshot="$E2E_WORKSPACE/foundry-key-before.env"
   managed_sops="$E2E_WORKSPACE/managed.enc.env"
+  key_map="$E2E_WORKSPACE/azurator.keys.json"
+  mapped_sops="$E2E_WORKSPACE/recreated.enc.env"
   age_identity="$E2E_WORKSPACE/age-identity.txt"
 
   printf '\nStep 3/7: skipped Azure-binding rotation on the unbound Foundry host key\n'
@@ -1250,7 +1344,31 @@ main() {
     'Exported directly to SOPS ciphertext and added one grouped alias for each selected slot.' \
     'The encrypted document also contains one unrelated value and one empty assignment.'
 
-  printf '\nStep 5/7: structured SOPS matching and executable bridge plan\n'
+  printf '\nStep 5/7: reusable key map, SOPS recreation, and executable bridge plan\n'
+  "$AZURATOR_BIN" match \
+    --subscription "$SUBSCRIPTION_ID" \
+    --sops-file "$managed_sops" \
+    --key-map-out "$key_map"
+  validate_key_map \
+    "$key_map" "$storage_selector" "$storage_secondary_selector" "$openai_selector"
+
+  "$AZURATOR_BIN" export \
+    --subscription "$SUBSCRIPTION_ID" \
+    --key-map "$key_map" \
+    --sops-out "$mapped_sops"
+  if [[ ! -f "$mapped_sops" ]]; then
+    printf 'Key-map export was cancelled; no managed rotation was attempted.\n'
+    remove_workspace
+    run_lifecycle down
+    WORKFLOW_COMPLETED=true
+    return
+  fi
+  [[ ! -L "$mapped_sops" && "$(stat -c '%a' "$mapped_sops")" == "600" ]] \
+    || fail "the key-map SOPS export did not satisfy the private mode-0600 contract"
+  validate_mapped_sops_document \
+    "$mapped_sops" "$storage_selector" "$storage_secondary_selector" "$openai_selector"
+  rm -f -- "$mapped_sops" "$key_map"
+
   match_report_json="$(
     "$AZURATOR_BIN" match \
       --subscription "$SUBSCRIPTION_ID" \
@@ -1270,6 +1388,7 @@ main() {
     "$plan_report_json" "$managed_sops" "$storage_selector" "$storage_secondary_selector" "$openai_selector"
   plan_report_json=""
   printf '%s\n' \
+    'Verified the reusable key map and recreated exactly six encrypted Azure assignments.' \
     'Verified six matched assignments grouped into three local SOPS bindings.' \
     'Verified the complete 31-step plan, including Storage key2 restoration after both slots rotate.'
 

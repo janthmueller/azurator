@@ -5,9 +5,8 @@ description: Create a new plaintext or SOPS-encrypted dotenv file from selected 
 
 import { Aside } from '@astrojs/starlight/components';
 
-`azurator export` creates one new dotenv file from explicitly selected
-supported key slots. Choose plaintext or SOPS encryption through the output
-option.
+`azurator export` creates one new dotenv file from selected key slots or a
+saved key map. Choose plaintext or SOPS encryption through the output option.
 
 ## Choose the output
 
@@ -63,6 +62,34 @@ azurator export --all --sops-out azure-keys.enc.env
 `--all` remains limited to the selected subscription and supported key-resource
 types. It does not mean every secret in Azure.
 
+## Reuse selector mappings
+
+Create a secret-free key map from the confirmed matches in an existing file:
+
+```bash
+azurator match --sops-file secrets.enc.env --key-map-out azurator.keys.json
+```
+
+Plaintext files use `--env-file` instead. The map records each matched selector,
+complete ARM resource ID, and exact slot. It contains no key values, source path,
+or fingerprints.
+
+Use it to recreate those assignments with the current Azure values:
+
+```bash
+azurator export --key-map azurator.keys.json --sops-out recreated.enc.env
+azurator export --key-map azurator.keys.json --out recreated.env
+```
+
+Export includes exactly the mappings in the file. It preserves several selector
+aliases for one slot and does not add an unlisted sibling key. The active
+subscription must match the map. SOPS export still requires suitable creation
+rules and recipients.
+
+A key map can be shared when its subscription ID, resource IDs, and selector
+names are acceptable infrastructure metadata for that repository. It cannot
+reconstruct unrelated values from the original dotenv file.
+
 ## Destination guarantees
 
 Export creates one new mode-`0600` file on POSIX systems and never prints key
@@ -71,6 +98,8 @@ must not already exist. Azurator never infers encryption from a filename and
 never overwrites, merges, appends, or writes exported values to stdout.
 Cancellation and failures leave no destination.
 
+Choose one selection mode: `--key-map`, `--select`, `--all`, or the interactive
+picker.
 Use `-y` to skip the confirmation after the complete valid export intent is
 displayed. It does not bypass selection or destination checks.
 

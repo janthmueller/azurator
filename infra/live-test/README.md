@@ -73,7 +73,20 @@ and does not probe aliases.
 
 ## Lifecycle
 
-Use the Nix apps from the repository root:
+First create the local subscription allowlist from the repository root:
+
+```sh
+cp infra/live-test/.env.example infra/live-test/.env
+```
+
+Replace `YOUR_SUBSCRIPTION_ID` with the one Azure subscription that may host the
+disposable fixture. The gitignored file is not a secret. It is a local safety
+pin. Every lifecycle, E2E, and recovery command compares its exact value with
+`az account show` and stops before preview, deployment, rotation, or teardown on
+a mismatch. The file is parsed as one assignment and is never sourced as shell
+code.
+
+Then use the Nix apps:
 
 ```sh
 nix run .#live-test-what-if
@@ -143,18 +156,22 @@ Azurator commands. It:
    `Key1`; no plaintext export is created for this managed path;
 8. adds one exact alias for each selected key plus an unrelated value and an
    empty assignment inside the ciphertext;
-9. confirms through `match --sops-file --json` that six assignments form three
+9. writes a secret-free key map from the six confirmed assignments, uses that
+   map to create a second SOPS file containing exactly those six assignments,
+   verifies all three source-to-alias pairs across both Storage slots and Azure
+   OpenAI `Key1`, then removes both temporary map-driven artifacts;
+10. confirms through `match --sops-file --json` that six assignments form three
    grouped local bindings while the reviewed Foundry and App Service records
    are also identified;
-10. validates the complete structured `plan --sops-file --json`, including all
+11. validates the complete structured `plan --sops-file --json`, including all
     31 bridge, regeneration, and finalization steps across the seven bindings,
     including restoration of the local binding originally attributed to
     Storage `key2` onto its regenerated value;
-11. lets `azurator rotate --sops-file` generate, display, validate, and confirm
+12. lets `azurator rotate --sops-file` generate, display, validate, and confirm
     that same plan once, then checks the encrypted aliases, unrelated and empty
     assignments, both Foundry records, all three App Service key settings, and
     the unrelated App Service setting; and
-12. delegates deletion to `live-test-down`, including its fresh confirmation.
+13. delegates deletion to `live-test-down`, including its fresh confirmation.
 
 The workflow does not pass `--yes`, invoke a model, store blob data, or claim a
 workload health check. Only the tagged enabled Foundry host, Storage, and Azure
@@ -168,11 +185,12 @@ Verified success also removes it before teardown.
 
 The current guided managed path selects both slots of the tagged Storage
 Account and one slot of the tagged Azure OpenAI account. Its fake-command
-contract test covers the complete two-slot order and rejects a plan that omits
-or misorders the final restoration to Storage `key2`. Two-slot ordering, original-slot restoration,
-grouped dotenv aliases, grouped SOPS aliases, resume reconciliation, drift
-rejection, and operation redaction are also covered by product tests without
-Azure mutation.
+contract test covers the reusable key-map round trip, rejection of an invalid
+map and invalid map-driven SOPS output, the complete two-slot order, and
+rejection of a plan that omits or misorders the final restoration to Storage
+`key2`. Two-slot ordering, original-slot restoration, grouped dotenv aliases,
+grouped SOPS aliases, resume reconciliation, drift rejection, and operation
+redaction are also covered by product tests without Azure mutation.
 
 If the managed SOPS rotation fails or is interrupted after the attempt starts,
 the fixture and private workspace are deliberately retained. A recovery
@@ -192,11 +210,12 @@ Delete the private workspace only after recovery is complete or deliberately
 abandoned, then run `nix run .#live-test-down`. This command exercises only the
 verified happy path; controlled interruption is a separate command.
 
-Explicitly approved disposable runs have exercised the complete guided path:
+Explicitly approved disposable runs exercised the complete guided path:
 
 - enabled and disabled key-authentication discovery variants;
 - direct Foundry-host rotation with Azure binding inspection skipped;
 - SOPS export without a plaintext intermediary;
+- reusable key-map creation and recreation of all six encrypted assignments;
 - six encrypted aliases grouped into three local bindings;
 - the exact 31-step Storage, Azure OpenAI, Foundry, App Service, and SOPS plan;
 - both Storage slots with restoration of the original `key2` binding;

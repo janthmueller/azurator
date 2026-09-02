@@ -13,6 +13,8 @@ readonly SUBSCRIPTION_ID="11111111-1111-1111-1111-111111111111"
 readonly OPERATION_ID="57c7fa92-2899-4c2f-9d30-2fc915be5f6c"
 readonly STORAGE_ACCOUNT_ID="/subscriptions/$SUBSCRIPTION_ID/resourceGroups/rg-azurator-live-test/providers/Microsoft.Storage/storageAccounts/stazuratortest"
 readonly DISABLED_STORAGE_ACCOUNT_ID="/subscriptions/$SUBSCRIPTION_ID/resourceGroups/rg-azurator-live-test/providers/Microsoft.Storage/storageAccounts/stazuratordisabled"
+readonly SCOPE_FILE="$TEST_ROOT/live-test.env"
+readonly WRONG_SCOPE_FILE="$TEST_ROOT/wrong-live-test.env"
 
 cleanup() {
   rm -rf -- "$TEST_ROOT"
@@ -33,6 +35,10 @@ new_case() {
 run_recovery() {
   local mode="$1"
   local root="$2"
+  local scope_file="$SCOPE_FILE"
+  if [[ "$mode" == "scope-mismatch" ]]; then
+    scope_file="$WRONG_SCOPE_FILE"
+  fi
   FAKE_MODE="$mode" \
     FAKE_ROOT="$root" \
     FAKE_LOG="$root/calls.log" \
@@ -42,6 +48,7 @@ run_recovery() {
     AZURATOR_LIVE_TEST_JQ="$(command -v jq)" \
     AZURATOR_LIVE_TEST_AZURATOR="$TEST_BIN/azurator" \
     AZURATOR_LIVE_TEST_LIFECYCLE="$TEST_BIN/lifecycle" \
+    AZURATOR_LIVE_TEST_SCOPE_FILE="$scope_file" \
     "$BASH" "$RECOVERY_SCRIPT"
 }
 
@@ -73,9 +80,28 @@ create_driver_wrapper() {
 trap cleanup EXIT
 
 mkdir -p "$TEST_BIN"
+printf 'AZURATOR_LIVE_TEST_SUBSCRIPTION_ID=%s\n' "$SUBSCRIPTION_ID" >"$SCOPE_FILE"
+printf 'AZURATOR_LIVE_TEST_SUBSCRIPTION_ID=%s\n' \
+  "22222222-2222-2222-2222-222222222222" >"$WRONG_SCOPE_FILE"
 create_driver_wrapper az
 create_driver_wrapper azurator
 create_driver_wrapper lifecycle
+
+scope_mismatch_root="$(new_case scope-mismatch)"
+if run_recovery scope-mismatch "$scope_mismatch_root" \
+  >"$scope_mismatch_root/output.log" 2>&1; then
+  fail "a recovery subscription outside the local allowlist returned success"
+fi
+[[ ! -e "$scope_mismatch_root/group-exists" ]] \
+  || fail "a recovery subscription outside the local allowlist reached fixture deployment"
+assert_empty_tmp "$scope_mismatch_root"
+assert_no_secret_output "$scope_mismatch_root"
+grep -Fq "is not allowed by the local live-test subscription allowlist" \
+  "$scope_mismatch_root/output.log" \
+  || fail "the recovery allowlist mismatch did not fail with a fixed explanation"
+if grep -Eq '^(azurator|lifecycle) ' "$scope_mismatch_root/calls.log"; then
+  fail "a recovery allowlist mismatch reached Azurator or the fixture lifecycle"
+fi
 
 success_root="$(new_case success)"
 if ! run_recovery success "$success_root" >"$success_root/output.log" 2>&1; then

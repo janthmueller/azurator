@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from enum import IntEnum
 from pathlib import Path
 
 import typer
@@ -25,6 +26,7 @@ from azurator.models import (
     PlanStep,
     PlanStepAction,
     PlanStepPhase,
+    PlanWarning,
     RotationPlan,
     SupportCatalog,
     WarningImpact,
@@ -117,6 +119,38 @@ _GROUPED_WARNING_CODES = (
 )
 
 
+class OutputDetail(IntEnum):
+    """How much secret-safe explanatory detail human output should include."""
+
+    normal = 0
+    verbose = 1
+    diagnostic = 2
+
+    @classmethod
+    def from_count(cls, count: int) -> OutputDetail:
+        """Clamp a repeatable CLI verbosity count to the supported levels."""
+
+        return cls(min(max(count, 0), cls.diagnostic))
+
+
+def _diagnostic_suffix(warning: DiscoveryWarning | PlanWarning, detail: OutputDetail) -> str:
+    if detail < OutputDetail.diagnostic:
+        return ""
+    fields = [
+        f"code={warning.code}",
+        f"impact={warning.impact.value}",
+        f"category={warning.category.value}",
+    ]
+    if warning.provider is not None:
+        fields.append(f"provider={warning.provider}")
+    if warning.resource_id is not None:
+        fields.append(f"resource={warning.resource_id}")
+    binding_id = getattr(warning, "binding_id", None)
+    if isinstance(binding_id, str):
+        fields.append(f"binding={binding_id}")
+    return f" [dim]({escape(', '.join(fields))})[/dim]"
+
+
 def subscription_label(subscription_id: str, name: str | None = None) -> str:
     """Prefer a normalized subscription name while retaining its exact scope."""
 
@@ -157,6 +191,7 @@ def render_support_catalog(
     *,
     show_key_resources: bool,
     show_bindings: bool,
+    detail: OutputDetail = OutputDetail.normal,
 ) -> None:
     """Render supported key-resource and credential-binding types by domain role."""
 
@@ -174,8 +209,9 @@ def render_support_catalog(
                 ", ".join(escape(slot) for slot in resource.key_slots),
             )
         console.print(table)
-        console.print()
-        console.print("[dim]Supports discovery, matching, export, and rotation.[/dim]")
+        if detail >= OutputDetail.verbose:
+            console.print()
+            console.print("[dim]Supports discovery, matching, export, and rotation.[/dim]")
 
     if show_key_resources and show_bindings:
         console.print()
@@ -195,16 +231,17 @@ def render_support_catalog(
                 escape("Automatic" if binding.included_by == "automatic" else binding.included_by),
             )
         console.print(table)
-        console.print()
-        console.print("[dim]Supports inspection, update, and verification.[/dim]")
+        if detail >= OutputDetail.verbose:
+            console.print()
+            console.print("[dim]Supports inspection, update, and verification.[/dim]")
 
 
-def render_inventory(inventory: Inventory) -> None:
+def render_inventory(inventory: Inventory, *, detail: OutputDetail = OutputDetail.normal) -> None:
     """Render a metadata-only Azure inventory."""
 
     console = Console()
     resource_count = len(inventory.resources)
-    console.print(f"[bold]Azure key resources[/bold] [dim]· {resource_count}[/dim]")
+    console.print(f"[bold]Supported Azure key resources[/bold] [dim]· {resource_count}[/dim]")
     subscription = escape(subscription_label(inventory.subscription_id, inventory.subscription_name))
     console.print(f"[dim]Subscription {subscription}[/dim]")
     console.print()
@@ -224,14 +261,14 @@ def render_inventory(inventory: Inventory) -> None:
         )
 
     console.print(table)
-    _render_inventory_notes(console, inventory)
+    _render_inventory_notes(console, inventory, detail=detail)
 
 
-def render_matches(report: MatchReport) -> None:
+def render_matches(report: MatchReport, *, detail: OutputDetail = OutputDetail.normal) -> None:
     """Render sparse exact-key matches and supported bindings."""
 
     console = Console()
-    _render_match_heading(console, report)
+    _render_match_heading(console, report, detail=detail)
 
     if not report.matches:
         console.print("No matching Azure key slots were found.")
@@ -252,15 +289,15 @@ def render_matches(report: MatchReport) -> None:
             )
         console.print(table)
 
-    _render_bindings(console, report)
-    _render_match_notes(console, report)
+    _render_bindings(console, report, detail=detail)
+    _render_match_notes(console, report, detail=detail)
 
 
-def render_match_matrix(report: MatchReport) -> None:
+def render_match_matrix(report: MatchReport, *, detail: OutputDetail = OutputDetail.normal) -> None:
     """Render exact-key matches as an input-by-resource matrix."""
 
     console = Console()
-    _render_match_heading(console, report)
+    _render_match_heading(console, report, detail=detail)
 
     inspections = {inspection.resource_id: inspection for inspection in report.inspections}
     cells: dict[tuple[str, str], list[str]] = {}
@@ -280,8 +317,8 @@ def render_match_matrix(report: MatchReport) -> None:
             *(", ".join(cells.get((selector, resource.resource_id), ())) or "—" for resource in report.resources),
         )
     console.print(table)
-    _render_bindings(console, report)
-    _render_match_notes(console, report)
+    _render_bindings(console, report, detail=detail)
+    _render_match_notes(console, report, detail=detail)
 
 
 def render_export_intent(
@@ -290,14 +327,20 @@ def render_export_intent(
     subscription: SubscriptionSelection,
     *,
     encrypted: bool,
+    detail: OutputDetail = OutputDetail.normal,
 ) -> None:
     """Render the complete secret-free plaintext or SOPS export intent."""
 
     console = Console()
-    count = len(assignments)
-    noun = "key slot" if count == 1 else "key slots"
+    slot_count = len({(assignment.resource.resource_id.casefold(), assignment.key_slot) for assignment in assignments})
+    slot_noun = "key slot" if slot_count == 1 else "key slots"
+    assignment_count = len(assignments)
+    summary = f"{slot_count} {slot_noun}"
+    if assignment_count != slot_count:
+        assignment_noun = "assignment" if assignment_count == 1 else "assignments"
+        summary += f", {assignment_count} {assignment_noun}"
     title = "SOPS-encrypted dotenv export" if encrypted else "Plaintext dotenv export"
-    console.print(f"[bold]{title}[/bold] [dim]· {count} {noun}[/dim]")
+    console.print(f"[bold]{title}[/bold] [dim]· {summary}[/dim]")
     console.print(f"[dim]Subscription {subscription_label(subscription.subscription_id, subscription.name)}[/dim]")
     console.print(f"[dim]Destination {escape(str(destination))}[/dim]")
     console.print()
@@ -314,35 +357,44 @@ def render_export_intent(
             escape(assignment.key_slot),
         )
     console.print(table)
-    console.print()
     if encrypted:
-        console.print(
-            "[yellow]SOPS will encrypt every value before the new file is created. "
-            "No plaintext file will be written.[/yellow]"
-        )
-        console.print("[dim]Azurator will use mode 0600 and will never replace an existing path.[/dim]")
+        if detail >= OutputDetail.verbose:
+            console.print()
+            console.print(
+                "[dim]SOPS encrypts and verifies every value before Azurator creates the destination. "
+                "No plaintext file is written.[/dim]"
+            )
+            console.print("[dim]The destination is created with mode 0600 and never replaces an existing path.[/dim]")
     else:
+        console.print()
+        console.print("[yellow]This creates a plaintext file containing live Azure keys.[/yellow]")
+        if detail >= OutputDetail.verbose:
+            console.print("[dim]The destination is created with mode 0600 and never replaces an existing path.[/dim]")
+    if detail >= OutputDetail.verbose:
         console.print(
-            "[yellow]This explicitly creates a plaintext secret file. "
-            "Azurator will use mode 0600 and will never replace an existing path.[/yellow]"
+            "[dim]The export contains only the displayed retrievable slots from supported key resources.[/dim]"
         )
-    console.print(
-        "[dim]Scope is limited to retrievable slots from supported key resources. "
-        "Other Azure credential types are not included.[/dim]"
-    )
 
 
-def render_plan(rotation_plan: RotationPlan, destination: Path | None) -> None:
+def render_plan(
+    rotation_plan: RotationPlan,
+    destination: Path | None,
+    *,
+    detail: OutputDetail = OutputDetail.normal,
+) -> None:
     """Render a secret-free plan preview or persisted-plan result."""
 
     console = Console()
-    state_label = {
-        PlanState.no_changes: "no changes",
-        PlanState.ready: "ready",
-        PlanState.confirmation_required: "review required",
-        PlanState.blocked: "blocked",
-    }[rotation_plan.state]
-    console.print(f"[bold]Rotation plan[/bold] [dim]· {state_label}[/dim]")
+    slot_count = len(rotation_plan.scheduled_slots)
+    if rotation_plan.state is PlanState.blocked:
+        summary = "blocked"
+    elif rotation_plan.state is PlanState.no_changes:
+        summary = "no changes"
+    else:
+        slot_noun = "key slot" if slot_count == 1 else "key slots"
+        step_noun = "step" if len(rotation_plan.steps) == 1 else "steps"
+        summary = f"{slot_count} {slot_noun}, {len(rotation_plan.steps)} {step_noun}"
+    console.print(f"[bold]Rotation plan[/bold] [dim]· {summary}[/dim]")
     subscription = escape(subscription_label(rotation_plan.subscription_id, rotation_plan.subscription_name))
     console.print(f"[dim]Subscription {subscription}[/dim]")
     if rotation_plan.source_format in {PlanSource.dotenv_file, PlanSource.sops_dotenv_file}:
@@ -354,74 +406,43 @@ def render_plan(rotation_plan: RotationPlan, destination: Path | None) -> None:
         if rotation_plan.source_path is not None:
             console.print(f"[dim]{label} {escape(rotation_plan.source_path)}[/dim]")
 
-    slot_count = len(rotation_plan.scheduled_slots)
     if not slot_count:
         console.print()
         if rotation_plan.state is PlanState.blocked:
-            if rotation_plan.source_format in {
-                PlanSource.dotenv_stdin,
-                PlanSource.dotenv_file,
-                PlanSource.sops_dotenv_file,
-            }:
-                console.print(
-                    "Azure key matching was incomplete, so the supplied values could not be fully evaluated. "
-                    "No rotation steps were generated."
-                )
-            else:
-                console.print("Azure inspection was incomplete, so no executable rotation steps were generated.")
+            console.print("No executable rotation steps were generated.")
         else:
-            console.print("No Azure key slot matched the supplied values; the plan contains no rotation steps.")
+            if rotation_plan.source_format is PlanSource.direct_selection:
+                console.print("No Azure key slots were selected for rotation.")
+            else:
+                console.print("No supplied value matched a supported Azure key slot.")
     else:
-        resource_count = len(rotation_plan.resources)
-        slot_noun = "slot" if slot_count == 1 else "slots"
-        resource_noun = "key resource" if resource_count == 1 else "key resources"
-        console.print(f"[dim]Scheduled {slot_count} key {slot_noun} across {resource_count} {resource_noun}.[/dim]")
         console.print()
         _render_plan_selection(console, rotation_plan)
         if rotation_plan.steps:
             console.print()
             _render_plan_steps(console, rotation_plan)
 
-    _render_plan_notes(console, rotation_plan)
-    console.print()
+    _render_plan_notes(console, rotation_plan, detail=detail)
     if destination is not None:
-        console.print(f"Saved secret-free plan to [bold]{escape(str(destination))}[/bold].")
-        if rotation_plan.state is PlanState.blocked or not rotation_plan.steps:
-            console.print("[dim]No Azure resource was changed; this plan is not executable.[/dim]")
-        else:
+        console.print()
+        console.print(f"Saved plan to [bold]{escape(str(destination))}[/bold].")
+        if detail >= OutputDetail.verbose and rotation_plan.state is not PlanState.blocked and rotation_plan.steps:
             rotate_command = "azurator rotate --plan ..."
             if rotation_plan.source_format is PlanSource.dotenv_stdin:
                 rotate_command += " --stdin"
-            console.print(
-                f"[dim]No Azure resource was changed; rotate from this artifact with '{rotate_command}'.[/dim]"
-            )
-    else:
-        console.print("[dim]Preview only; no plan file was written.[/dim]")
-        if rotation_plan.state is PlanState.blocked or not rotation_plan.steps:
-            console.print("[dim]No Azure resource was changed; this preview is not executable.[/dim]")
-        elif rotation_plan.source_format is PlanSource.direct_selection:
-            console.print(
-                "[dim]No Azure resource was changed; rerun with --out to persist this workflow, "
-                "or use 'azurator rotate' with the same selection to continue.[/dim]"
-            )
-        elif rotation_plan.source_format is PlanSource.dotenv_file:
-            console.print(
-                "[dim]No Azure resource was changed; rerun with --out to persist this workflow, "
-                "or use 'azurator rotate --env-file ...' to rematch the file and continue.[/dim]"
-            )
-        elif rotation_plan.source_format is PlanSource.sops_dotenv_file:
-            console.print(
-                "[dim]No Azure resource was changed; rerun with --out to persist this workflow, "
-                "or use 'azurator rotate --sops-file ...' to rematch the encrypted file and continue.[/dim]"
-            )
-        else:
-            console.print(
-                "[dim]No Azure resource was changed; rerun this streamed plan with --out "
-                "before rotating from the saved artifact.[/dim]"
-            )
+            console.print(f"[dim]Rotate with '{rotate_command}'.[/dim]")
+    elif detail >= OutputDetail.verbose:
+        console.print()
+        console.print("[dim]Preview only. No plan file was written.[/dim]")
 
 
-def render_rotate_intent(rotation_plan: RotationPlan, operation_path: Path, *, resume: bool) -> None:
+def render_rotate_intent(
+    rotation_plan: RotationPlan,
+    operation_path: Path,
+    *,
+    resume: bool,
+    detail: OutputDetail = OutputDetail.normal,
+) -> None:
     """Render the exact executable plan before confirmation."""
 
     console = Console()
@@ -441,21 +462,12 @@ def render_rotate_intent(rotation_plan: RotationPlan, operation_path: Path, *, r
     _render_plan_selection(console, rotation_plan)
     console.print()
     _render_plan_steps(console, rotation_plan)
-    _render_plan_notes(console, rotation_plan)
+    _render_plan_notes(console, rotation_plan, detail=detail)
     console.print()
-    console.print(f"[dim]Transient recovery state {escape(str(operation_path))}[/dim]")
-    console.print(
-        "[yellow]Credential bindings will be re-read after each update. "
-        "Running workloads are not reloaded or health-checked.[/yellow]"
-    )
-    if rotation_plan.source_format in {PlanSource.dotenv_file, PlanSource.sops_dotenv_file}:
-        storage = "encrypted file" if rotation_plan.source_format is PlanSource.sops_dotenv_file else "file"
-        console.print(
-            f"[yellow]The dotenv assignments are persisted in the {storage} on a valid sibling slot before "
-            "rotation. If execution stops there, the file intentionally remains on that temporary bridge; "
-            "resume with the retained operation ID.[/yellow]"
-        )
-    if not resume:
+    console.print("[dim]Verification covers the planned Azure keys and credential-binding values.[/dim]")
+    if detail >= OutputDetail.verbose:
+        console.print(f"[dim]Transient recovery state {escape(str(operation_path))}[/dim]")
+    if detail >= OutputDetail.verbose and not resume:
         console.print(
             "[dim]Recovery state is created only after confirmation and removed after verified success.[/dim]"
         )
@@ -480,18 +492,23 @@ def render_rotate_complete(
     operation_path: Path,
     *,
     cleanup_error: OperationError | None,
+    detail: OutputDetail = OutputDetail.normal,
 ) -> None:
     """Render verified rotation completion and recovery cleanup."""
 
     console = Console()
     console.print()
-    console.print("[bold green]Rotation completed[/bold green]")
-    console.print("All planned key and managed-configuration operations completed and were verified.")
-    if rotation_plan.source_format in {PlanSource.dotenv_file, PlanSource.sops_dotenv_file}:
+    console.print(
+        f"[bold green]Rotation completed[/bold green] [dim]· {len(rotation_plan.steps)}/{len(rotation_plan.steps)} "
+        "steps verified[/dim]"
+    )
+    if detail >= OutputDetail.verbose and rotation_plan.source_format in {
+        PlanSource.dotenv_file,
+        PlanSource.sops_dotenv_file,
+    }:
         storage = "SOPS-encrypted dotenv" if rotation_plan.source_format is PlanSource.sops_dotenv_file else "dotenv"
         console.print(f"The managed {storage} assignments contain their verified final planned values.")
-    render_operation_cleanup(operation_path, cleanup_error, console=console)
-    console.print("[yellow]Azurator did not reload or health-check workloads.[/yellow]")
+    render_operation_cleanup(operation_path, cleanup_error, console=console, detail=detail)
 
 
 def render_operation_cleanup(
@@ -499,12 +516,14 @@ def render_operation_cleanup(
     cleanup_error: OperationError | None,
     *,
     console: Console | None = None,
+    detail: OutputDetail = OutputDetail.normal,
 ) -> None:
     """Render whether transient recovery state was removed."""
 
     output = console or Console()
     if cleanup_error is None:
-        output.print("[dim]Transient recovery state was removed; no operation artifact was retained.[/dim]")
+        if detail >= OutputDetail.verbose:
+            output.print("[dim]Transient recovery state was removed.[/dim]")
         return
     output.print(
         "[yellow]Rotation succeeded, but completed recovery state could not be removed. "
@@ -512,18 +531,23 @@ def render_operation_cleanup(
     )
 
 
-def render_operation_list(report: RetainedOperationReport) -> None:
+def render_operation_list(
+    report: RetainedOperationReport,
+    *,
+    detail: OutputDetail = OutputDetail.normal,
+) -> None:
     """Render a concise local-only index of retained recovery operations."""
 
     console = Console()
     operation_count = len(report.operations)
     noun = "operation" if operation_count == 1 else "operations"
-    console.print(f"[bold]Retained rotation operations[/bold] [dim]· {operation_count} valid {noun}[/dim]")
     if not report.operations and not report.invalid_operation_ids:
-        console.print()
-        console.print("No retained rotation operation was found.")
-        console.print("[dim]Verified successful rotations leave no local operation history.[/dim]")
+        console.print("No retained rotation operations.")
+        if detail >= OutputDetail.verbose:
+            console.print("[dim]Verified successful rotations do not retain local operation history.[/dim]")
         return
+
+    console.print(f"[bold]Retained rotation operations[/bold] [dim]· {operation_count} valid {noun}[/dim]")
 
     if report.operations:
         console.print()
@@ -539,29 +563,36 @@ def render_operation_list(report: RetainedOperationReport) -> None:
             subscription = escape(subscription_label(summary.subscription_id, summary.subscription_name))
             console.print(f"  Subscription {subscription}")
             console.print(f"  {escape(current)}")
-            if summary.error_code is not None:
+            if detail >= OutputDetail.verbose and summary.error_code is not None:
                 console.print(f"  Failure code {escape(summary.error_code)}")
 
     if report.invalid_operation_ids:
         console.print()
         count = len(report.invalid_operation_ids)
         noun = "entry" if count == 1 else "entries"
-        operation_ids = ", ".join(str(operation_id) for operation_id in report.invalid_operation_ids)
-        console.print(
-            f"[yellow]{count} UUID-scoped {noun} could not be read safely or did not match "
-            f"the current operation format: {escape(operation_ids)}[/yellow]"
-        )
+        message = f"[yellow]{count} retained {noun} could not be read safely.[/yellow]"
+        console.print(message)
+        if detail >= OutputDetail.verbose:
+            operation_ids = ", ".join(str(operation_id) for operation_id in report.invalid_operation_ids)
+            console.print(f"[dim]Unreadable operation IDs: {escape(operation_ids)}[/dim]")
 
-    console.print()
-    console.print("[dim]This command inspected local private recovery state only; Azure was not contacted.[/dim]")
-    console.print("[dim]Use 'azurator operation show OPERATION_ID' for one operation's safe projection.[/dim]")
+    if detail >= OutputDetail.verbose:
+        console.print()
+        console.print("[dim]Only local recovery state was inspected. Azure was not contacted.[/dim]")
+        if report.operations:
+            console.print("[dim]Use 'azurator operation show OPERATION_ID' for one operation.[/dim]")
 
 
-def render_operation_show(summary: RetainedOperationSummary) -> None:
+def render_operation_show(
+    summary: RetainedOperationSummary,
+    *,
+    detail: OutputDetail = OutputDetail.normal,
+) -> None:
     """Render one retained operation without exposing its embedded plan or verifiers."""
 
     console = Console()
-    console.print(f"[bold]Retained rotation operation[/bold] [dim]· {summary.status.value}[/dim]")
+    status = "unfinished" if summary.status is OperationStatus.running else summary.status.value
+    console.print(f"[bold]Retained rotation operation[/bold] [dim]· {status}[/dim]")
     console.print(f"[dim]Operation {summary.operation_id}[/dim]")
     subscription = escape(subscription_label(summary.subscription_id, summary.subscription_name))
     console.print(f"[dim]Subscription {subscription}[/dim]")
@@ -580,10 +611,7 @@ def render_operation_show(summary: RetainedOperationSummary) -> None:
             f"slot {escape(step.key_slot)}"
         )
         if step.state is RetainedStepState.pending:
-            console.print(
-                "[dim]The external step was recorded before its call; resume reconciles current state "
-                "before deciding whether it must run.[/dim]"
-            )
+            console.print("[dim]Current Azure state will be reconciled before this step is resumed.[/dim]")
 
     console.print()
     table = Table(title="Scheduled key slots")
@@ -602,16 +630,12 @@ def render_operation_show(summary: RetainedOperationSummary) -> None:
         console.print(
             "[yellow]Rotation is recorded as complete; the retained artifact is awaiting validated cleanup.[/yellow]"
         )
-    elif summary.status is OperationStatus.running:
-        console.print(
-            "[yellow]A retained running status means normal execution did not finish cleanup; "
-            "it does not prove another process is still active.[/yellow]"
-        )
     console.print(f"Resume command: [bold]{escape(summary.resume_command)}[/bold]")
-    console.print(
-        "[dim]This view made no Azure call. Resume repeats the applicable authentication, subscription, "
-        "source, progress, and drift checks before continuing.[/dim]"
-    )
+    if detail >= OutputDetail.verbose:
+        console.print(
+            "[dim]Only local recovery state was inspected. Resume repeats authentication, scope, source, "
+            "progress, and drift checks before continuing.[/dim]"
+        )
 
 
 def _retained_step_compact(step: RetainedOperationStep | None) -> str:
@@ -734,7 +758,12 @@ def _plan_scope_note(rotation_plan: RotationPlan) -> str:
     )
 
 
-def _render_plan_notes(console: Console, rotation_plan: RotationPlan) -> None:
+def _render_plan_notes(
+    console: Console,
+    rotation_plan: RotationPlan,
+    *,
+    detail: OutputDetail,
+) -> None:
     if not rotation_plan.warnings:
         return
 
@@ -747,17 +776,47 @@ def _render_plan_notes(console: Console, rotation_plan: RotationPlan) -> None:
             "No Azure-side configurations containing selected Azure AI keys were checked."
         ),
     }
-    notes: list[tuple[str, WarningImpact]] = []
+    scope_notes: list[tuple[str, PlanWarning]] = []
+    notes: list[tuple[str, WarningImpact, PlanWarning]] = []
     seen: set[str] = set()
     for warning in rotation_plan.warnings:
+        is_scope_summary = False
         if warning.code == "provider-coverage-limited":
+            if detail < OutputDetail.verbose:
+                continue
             message = _plan_scope_note(rotation_plan)
         elif warning.code == "foundry-binding-coverage-limited":
-            message = binding_scope_note({resource.provider for resource in rotation_plan.resources}) or warning.message
+            if detail >= OutputDetail.verbose:
+                message = (
+                    binding_scope_note({resource.provider for resource in rotation_plan.resources}) or warning.message
+                )
+            else:
+                message = _azure_binding_scope_summary(rotation_plan)
+                if message is None:
+                    continue
+                is_scope_summary = True
+        elif warning.code == "app-service-settings-binding-coverage-limited":
+            if detail >= OutputDetail.verbose:
+                message = warning.message
+            else:
+                message = _azure_binding_scope_summary(rotation_plan)
+                if message is None:
+                    continue
+                is_scope_summary = True
         elif warning.code == "azure-binding-inspection-skipped":
             message = "Azure credential-binding inspection was skipped."
             if any(binding.location is BindingLocation.local for binding in rotation_plan.bindings):
                 message += " Explicit local bindings remain included."
+        elif warning.code == "dotenv-file-plaintext-at-rest":
+            if detail >= OutputDetail.verbose:
+                message = warning.message
+            else:
+                message = "Managed dotenv assignments may remain on a valid sibling key if rotation is interrupted."
+        elif warning.code == "sops-file-managed-update":
+            if detail >= OutputDetail.verbose:
+                message = warning.message
+            else:
+                message = "Managed dotenv assignments may remain on a valid sibling key if rotation is interrupted."
         elif warning.code == "app-service-settings-restart-and-concurrency":
             affected = tuple(
                 binding
@@ -777,6 +836,8 @@ def _render_plan_notes(console: Console, rotation_plan: RotationPlan) -> None:
                 "Workload health is not checked."
             )
         else:
+            if warning.impact is WarningImpact.advisory and detail < OutputDetail.verbose:
+                continue
             message = summary_by_code.get(warning.code)
         if message is None:
             resource = resources.get(warning.resource_id or "")
@@ -785,27 +846,63 @@ def _render_plan_notes(console: Console, rotation_plan: RotationPlan) -> None:
         if message in seen:
             continue
         seen.add(message)
-        notes.append((message, warning.impact))
+        if is_scope_summary:
+            scope_notes.append((message, warning))
+            continue
+        notes.append((message, warning.impact, warning))
 
-    if not notes:
+    if not scope_notes and not notes:
         return
     console.print()
-    console.print(
-        "[bold]Review[/bold]"
-        if rotation_plan.state not in {PlanState.ready, PlanState.no_changes}
-        else "[bold]Notes[/bold]"
-    )
+    for message, warning in scope_notes:
+        console.print(f"[dim]{escape(message)}[/dim]{_diagnostic_suffix(warning, detail)}")
+    if not notes:
+        return
+    if scope_notes:
+        console.print()
+    has_warning = any(impact is not WarningImpact.advisory for _, impact, _ in notes)
+    console.print("[bold]Warnings[/bold]" if has_warning else "[bold]Details[/bold]")
     styles = {
         WarningImpact.advisory: "dim",
         WarningImpact.confirmation: "yellow",
         WarningImpact.blocking: "red",
     }
-    for message, impact in notes:
+    for message, impact, warning in notes:
         style = styles[impact]
-        console.print(f"[{style}]• {escape(message)}[/{style}]")
+        suffix = _diagnostic_suffix(warning, detail)
+        console.print(f"[{style}]• {escape(message)}[/{style}]{suffix}")
 
 
-def _render_bindings(console: Console, report: MatchReport) -> None:
+def _azure_binding_scope_summary(rotation_plan: RotationPlan) -> str | None:
+    providers = {
+        *(inspection.provider for inspection in rotation_plan.binding_inspections),
+        *(
+            warning.provider
+            for warning in rotation_plan.warnings
+            if warning.code in {"foundry-binding-coverage-limited", "app-service-settings-binding-coverage-limited"}
+            and warning.provider is not None
+        ),
+    }
+    labels: list[str] = []
+    if "azure-foundry-connections" in providers:
+        labels.append("Foundry project key connections")
+    if "azure-app-service-settings" in providers:
+        labels.append("top-level App Service application settings")
+    if not labels:
+        return None
+    if len(labels) == 1:
+        scope = labels[0]
+    else:
+        scope = f"{', '.join(labels[:-1])} and {labels[-1]}"
+    return f"Azure bindings checked: {scope}."
+
+
+def _render_bindings(
+    console: Console,
+    report: MatchReport,
+    *,
+    detail: OutputDetail,
+) -> None:
     if not report.binding_inspections:
         return
 
@@ -813,7 +910,7 @@ def _render_bindings(console: Console, report: MatchReport) -> None:
         inspection for inspection in report.binding_inspections if inspection.provider == "azure-foundry-connections"
     )
     foundry_bindings = tuple(binding for binding in report.bindings if binding.provider == "azure-foundry-connections")
-    if foundry_inspections:
+    if foundry_inspections and (foundry_bindings or detail >= OutputDetail.verbose):
         _render_foundry_bindings(console, report, foundry_bindings, foundry_inspections)
 
     app_service_inspections = tuple(
@@ -822,21 +919,21 @@ def _render_bindings(console: Console, report: MatchReport) -> None:
     app_service_bindings = tuple(
         binding for binding in report.bindings if binding.provider == "azure-app-service-settings"
     )
-    if app_service_inspections:
+    if app_service_inspections and (app_service_bindings or detail >= OutputDetail.verbose):
         _render_app_service_bindings(console, report, app_service_bindings, app_service_inspections)
 
     dotenv_inspections = tuple(
         inspection for inspection in report.binding_inspections if inspection.provider == "local-dotenv-file"
     )
     dotenv_bindings = tuple(binding for binding in report.bindings if binding.provider == "local-dotenv-file")
-    if dotenv_inspections:
+    if dotenv_inspections and (dotenv_bindings or detail >= OutputDetail.verbose):
         _render_dotenv_bindings(console, report, dotenv_bindings)
 
     sops_inspections = tuple(
         inspection for inspection in report.binding_inspections if inspection.provider == "local-sops-dotenv-file"
     )
     sops_bindings = tuple(binding for binding in report.bindings if binding.provider == "local-sops-dotenv-file")
-    if sops_inspections:
+    if sops_inspections and (sops_bindings or detail >= OutputDetail.verbose):
         _render_dotenv_bindings(console, report, sops_bindings, encrypted=True)
 
 
@@ -849,11 +946,11 @@ def _render_foundry_bindings(
     count = len(bindings)
     noun = "connection" if count == 1 else "connections"
     console.print()
-    console.print(f"[bold]Foundry key connections[/bold] [dim]· {count} {noun}[/dim]")
+    console.print(f"[bold]Foundry connections[/bold] [dim]· {count} {noun}[/dim]")
     if not bindings:
         incomplete = any(inspection.status is not BindingInspectionStatus.inspected for inspection in inspections)
         if incomplete:
-            console.print("No supported Foundry key connection was confirmed; inspection was incomplete. See Notes.")
+            console.print("No supported Foundry key connection was confirmed; inspection was incomplete.")
         else:
             console.print("No checked Foundry project connection targeted a matched Azure key resource.")
         return
@@ -886,7 +983,7 @@ def _render_dotenv_bindings(
     assignment_count = sum(len(binding.selectors) for binding in bindings)
     noun = "assignment" if assignment_count == 1 else "assignments"
     console.print()
-    label = "Managed SOPS dotenv assignments" if encrypted else "Managed dotenv assignments"
+    label = "SOPS dotenv assignments" if encrypted else "Dotenv assignments"
     console.print(f"[bold]{label}[/bold] [dim]· {assignment_count} {noun}[/dim]")
     if not bindings:
         console.print("No dotenv assignment matched an Azure key slot.")
@@ -918,11 +1015,11 @@ def _render_app_service_bindings(
     setting_count = sum(len(binding.selectors) for binding in bindings)
     noun = "setting" if setting_count == 1 else "settings"
     console.print()
-    console.print(f"[bold]App Service bindings[/bold] [dim]· {setting_count} matched {noun}[/dim]")
+    console.print(f"[bold]App Service settings[/bold] [dim]· {setting_count} matched {noun}[/dim]")
     if not bindings:
         incomplete = any(inspection.status is not BindingInspectionStatus.inspected for inspection in inspections)
         if incomplete:
-            console.print("No App Service setting was confirmed; inspection was incomplete. See Notes.")
+            console.print("No App Service setting was confirmed; inspection was incomplete.")
         else:
             console.print("No checked App Service application setting exactly matched a selected Azure key.")
         return
@@ -944,23 +1041,29 @@ def _render_app_service_bindings(
     console.print(table)
 
 
-def _render_match_heading(console: Console, report: MatchReport) -> None:
+def _render_match_heading(
+    console: Console,
+    report: MatchReport,
+    *,
+    detail: OutputDetail,
+) -> None:
     match_count = len(report.matches)
     match_noun = "match" if match_count == 1 else "matches"
     console.print(f"[bold]Azure key matches[/bold] [dim]· {match_count} {match_noun}[/dim]")
     subscription = escape(subscription_label(report.subscription_id, report.subscription_name))
     console.print(f"[dim]Subscription {subscription}[/dim]")
-    compared_resources = sum(
-        inspection.status is CandidateInspectionStatus.compared for inspection in report.inspections
-    )
-    input_noun = "value" if len(report.input_selectors) == 1 else "values"
-    slot_noun = "slot" if report.candidate_slots_compared == 1 else "slots"
-    resource_noun = "key resource" if compared_resources == 1 else "key resources"
-    console.print(
-        f"[dim]Compared {len(report.input_selectors)} input {input_noun} with "
-        f"{report.candidate_slots_compared} Azure key {slot_noun} across "
-        f"{compared_resources} {resource_noun}.[/dim]"
-    )
+    if detail >= OutputDetail.verbose:
+        compared_resources = sum(
+            inspection.status is CandidateInspectionStatus.compared for inspection in report.inspections
+        )
+        input_noun = "value" if len(report.input_selectors) == 1 else "values"
+        slot_noun = "slot" if report.candidate_slots_compared == 1 else "slots"
+        resource_noun = "key resource" if compared_resources == 1 else "key resources"
+        console.print(
+            f"[dim]Compared {len(report.input_selectors)} input {input_noun} with "
+            f"{report.candidate_slots_compared} Azure key {slot_noun} across "
+            f"{compared_resources} {resource_noun}.[/dim]"
+        )
     console.print()
 
 
@@ -988,15 +1091,21 @@ def binding_scope_note(providers: set[str]) -> str | None:
     return None
 
 
-def _render_match_notes(console: Console, report: MatchReport) -> None:
+def _render_match_notes(
+    console: Console,
+    report: MatchReport,
+    *,
+    detail: OutputDetail,
+) -> None:
     notes: list[str] = []
+    alerts: list[str] = []
     warning_codes = {warning.code for warning in report.warnings}
     resource_providers = {resource.provider for resource in report.resources}
-    if report.skipped_empty_selectors:
+    if detail >= OutputDetail.verbose and report.skipped_empty_selectors:
         count = len(report.skipped_empty_selectors)
         noun = "assignment" if count == 1 else "assignments"
         notes.append(f"Skipped {count} empty dotenv {noun}.")
-    if warning_codes & _COVERAGE_WARNING_CODES:
+    if detail >= OutputDetail.verbose and warning_codes & _COVERAGE_WARNING_CODES:
         key_types: list[str] = []
         if "azure-storage" in resource_providers:
             key_types.append("Storage Account key1/key2")
@@ -1010,27 +1119,42 @@ def _render_match_notes(console: Console, report: MatchReport) -> None:
             notes.append(
                 "Key comparison was limited to supported key-resource types. Other Azure credentials were not checked."
             )
-    if "storage-bindings-not-inspected" in warning_codes:
+    if detail >= OutputDetail.verbose and "storage-bindings-not-inspected" in warning_codes:
         notes.append("No Azure-side configurations containing matched Storage keys were checked.")
-    if "cognitive-services-bindings-not-inspected" in warning_codes:
+    if detail >= OutputDetail.verbose and "cognitive-services-bindings-not-inspected" in warning_codes:
         notes.append("No Azure-side configurations containing matched Azure AI keys were checked.")
-    if "foundry-binding-coverage-limited" in warning_codes:
+    if detail >= OutputDetail.verbose and "foundry-binding-coverage-limited" in warning_codes:
         matched_ids = {match.resource_id for match in report.matches}
         matched_providers = {resource.provider for resource in report.resources if resource.resource_id in matched_ids}
         coverage_warning = next(
             warning for warning in report.warnings if warning.code == "foundry-binding-coverage-limited"
         )
         notes.append(binding_scope_note(matched_providers) or coverage_warning.message)
-    notes.extend(
-        warning.message
-        for warning in report.warnings
-        if warning.code == "app-service-settings-binding-coverage-limited"
-    )
+    if detail >= OutputDetail.verbose:
+        notes.extend(
+            warning.message
+            for warning in report.warnings
+            if warning.code == "app-service-settings-binding-coverage-limited"
+        )
     if warning_codes & _BINDING_SKIP_WARNING_CODES:
         message = "Azure credential-binding inspection was skipped."
         if any(binding.location is BindingLocation.local for binding in report.bindings):
             message += " Explicit local bindings remain included."
-        notes.append(message)
+        alerts.append(message)
+
+    resources = {resource.resource_id: resource for resource in report.resources}
+    for inspection in report.binding_inspections:
+        if inspection.status is BindingInspectionStatus.inspected:
+            continue
+        has_specific_warning = any(
+            warning.provider == inspection.provider and warning.code not in _BINDING_COVERAGE_WARNING_CODES
+            for warning in report.warnings
+        )
+        if has_specific_warning:
+            continue
+        resource = resources.get(inspection.resource_id)
+        target = resource.name if resource is not None else "a selected key resource"
+        alerts.append(f"Credential-binding inspection was incomplete for {target}.")
 
     grouped_codes = (
         _COVERAGE_WARNING_CODES
@@ -1039,34 +1163,53 @@ def _render_match_notes(console: Console, report: MatchReport) -> None:
         | _BINDING_SKIP_WARNING_CODES
         | _PERMISSION_WARNING_CODES
     )
-    detailed = [warning for warning in report.warnings if warning.code not in grouped_codes]
-    if not notes and not detailed:
+    verbose_only_codes = {
+        "app-service-settings-restart-and-concurrency",
+        "dotenv-file-plaintext-at-rest",
+        "sops-file-managed-update",
+    }
+    detailed = [
+        warning
+        for warning in report.warnings
+        if warning.code not in grouped_codes
+        and (detail >= OutputDetail.verbose or warning.code not in verbose_only_codes)
+        and (detail >= OutputDetail.verbose or warning.impact is not WarningImpact.advisory)
+    ]
+    if not notes and not alerts and not detailed:
         return
 
-    resources = {resource.resource_id: resource for resource in report.resources}
     console.print()
-    console.print("[bold]Notes[/bold]")
+    console.print("[bold]Warnings[/bold]" if alerts or detailed else "[bold]Details[/bold]")
+    for alert in alerts:
+        console.print(f"[yellow]• {escape(alert)}[/yellow]")
     for note in notes:
         console.print(f"[dim]• {escape(note)}[/dim]")
     for warning in detailed:
         resource = resources.get(warning.resource_id or "")
         resource_suffix = f" · {escape(resource.name)}" if resource is not None else ""
+        suffix = _diagnostic_suffix(warning, detail)
         console.print(
-            f"[yellow]• {escape(warning_title(warning.code))}{resource_suffix}:[/yellow] {escape(warning.message)}"
+            f"[yellow]• {escape(warning_title(warning.code))}{resource_suffix}:[/yellow] "
+            f"{escape(warning.message)}{suffix}"
         )
 
 
-def _render_inventory_notes(console: Console, inventory: Inventory) -> None:
+def _render_inventory_notes(
+    console: Console,
+    inventory: Inventory,
+    *,
+    detail: OutputDetail,
+) -> None:
     warning_codes = {warning.code for warning in inventory.warnings}
     notes: list[str] = []
 
-    if warning_codes & _COVERAGE_WARNING_CODES:
+    if detail >= OutputDetail.verbose and warning_codes & _COVERAGE_WARNING_CODES:
         notes.append(
             "Coverage is limited to supported key-resource types. Other Azure resource types are not included."
         )
 
-    bindings_missing = bool(warning_codes & _BINDING_WARNING_CODES)
-    permissions_missing = bool(warning_codes & _PERMISSION_WARNING_CODES)
+    bindings_missing = detail >= OutputDetail.verbose and bool(warning_codes & _BINDING_WARNING_CODES)
+    permissions_missing = detail >= OutputDetail.verbose and bool(warning_codes & _PERMISSION_WARNING_CODES)
     if bindings_missing and permissions_missing:
         notes.append("Credential bindings and key-operation permissions are not checked by discover.")
     elif bindings_missing:
@@ -1087,8 +1230,9 @@ def _render_inventory_notes(console: Console, inventory: Inventory) -> None:
         return
 
     console.print()
-    console.print("[bold]Notes[/bold]")
+    console.print("[bold]Warnings[/bold]" if detailed_warnings else "[bold]Details[/bold]")
     for note in notes:
         console.print(f"[dim]• {note}[/dim]")
     for warning in detailed_warnings:
-        console.print(f"[yellow]• {escape(warning_title(warning.code))}:[/yellow] {escape(warning.message)}")
+        suffix = _diagnostic_suffix(warning, detail)
+        console.print(f"[yellow]• {escape(warning_title(warning.code))}:[/yellow] {escape(warning.message)}{suffix}")

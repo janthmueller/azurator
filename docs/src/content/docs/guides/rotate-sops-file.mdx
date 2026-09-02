@@ -48,3 +48,7 @@ not reload or health-check workloads that read the file.
 
 `azurator export --sops-out new.enc.env` can create a new SOPS-encrypted dotenv
 file. It never merges into or replaces an existing file.
+
+To let another authorized user recreate only the mapped Azure assignments,
+write a key map with `match --key-map-out` and use it with `export --key-map`.
+See [Export Keys](../export-keys/#reuse-selector-mappings).

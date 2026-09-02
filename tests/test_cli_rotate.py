@@ -143,7 +143,7 @@ def test_rotate_env_file_uses_one_operation_and_removes_it_after_success(
 
     result = CliRunner().invoke(
         app,
-        ["rotate", "--env-file", str(source), "--subscription", SUBSCRIPTION_ID, "--yes"],
+        ["-v", "rotate", "--env-file", str(source), "--subscription", SUBSCRIPTION_ID, "--yes"],
     )
 
     assert result.exit_code == 0
@@ -152,7 +152,8 @@ def test_rotate_env_file_uses_one_operation_and_removes_it_after_success(
     assert not operation_path.exists()
     assert not operation_path.parent.exists()
     assert "Transient recovery state" in result.stdout
-    assert "no operation artifact was retained" in result.stdout
+    assert "Transient recovery state was removed" in result.stdout
+    assert result.stdout.count("If interrupted") == 1
 
 
 def test_rotate_interactive_shortcut_uses_selected_plan_only_in_operation(
@@ -383,11 +384,11 @@ def test_rotate_revalidates_dotenv_plan_without_accepting_stdin_tokens(
         input="TOKEN=must-not-render\n",
     )
     assert rejected.exit_code == 1
-    assert "do not accept stdin input" in rejected.output
+    assert "--stdin is accepted only for a saved stdin-based plan" in rejected.output
     assert "must-not-render" not in rejected.output
     assert not service.started
 
-    result = CliRunner().invoke(app, ["rotate", "--plan", str(plan_path), "--yes"])
+    result = CliRunner().invoke(app, ["-v", "rotate", "--plan", str(plan_path), "--yes"])
 
     assert result.exit_code == 0
     assert service.started
@@ -444,7 +445,7 @@ def test_rotate_rebuilds_direct_selection_plan_without_token_input(
         input="TOKEN=must-not-render\n",
     )
     assert rejected.exit_code == 1
-    assert "do not accept stdin input" in rejected.output
+    assert "--stdin is accepted only for a saved stdin-based plan" in rejected.output
     assert not service.started
 
     result = CliRunner().invoke(app, ["rotate", "--plan", str(plan_path), "--yes"])
@@ -654,7 +655,7 @@ def test_started_failure_retains_one_operation_and_prints_exact_resume_command(
 
     _patch_execution_service(monkeypatch, FailingExecutionService())
 
-    result = CliRunner().invoke(app, ["rotate", "--plan", str(plan_path), "--yes"])
+    result = CliRunner().invoke(app, ["-v", "rotate", "--plan", str(plan_path), "--yes"])
 
     assert result.exit_code == 1
     assert operation_path.exists()
@@ -695,8 +696,8 @@ def test_failure_does_not_suggest_resume_for_an_invalid_operation_entry(
 
     assert result.exit_code == 1
     assert operation_path.exists()
-    assert "unsafe or invalid" in result.output
-    assert "will not suggest a resume command" in result.output
+    assert "invalid recovery entry remains" in result.output
+    assert "cannot suggest a resume command" in result.output
     assert f"azurator rotate --resume {CLI_OPERATION_ID}" not in result.output
     assert marker not in result.output
 
@@ -743,5 +744,6 @@ def test_resume_of_stale_completed_operation_only_cleans_state(
     assert result.exit_code == 0
     assert not service.resumed
     assert not operation_path.exists()
-    assert "already complete; no Azure call was made" in result.output
-    assert "no operation artifact was retained" in result.output
+    assert "was already complete" in result.output
+    assert "no Azure call was made" not in result.output
+    assert "Transient recovery state was removed" not in result.output

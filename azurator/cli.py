@@ -44,10 +44,12 @@ from azurator.composition import inspect_selection as _compose_inspect_selection
 from azurator.composition import match_dotenv as _compose_match_dotenv
 from azurator.execution import ExecutionError, ExecutionService
 from azurator.exporting import (
+    DotenvExportAssignment,
     DotenvExportService,
     ExportError,
     SopsDotenvExportService,
     build_dotenv_export_assignments,
+    build_key_map_export_assignments,
 )
 from azurator.files import (
     MAX_OPERATION_ARTIFACT_BYTES,
@@ -60,15 +62,18 @@ from azurator.files import (
     managed_plaintext_permissions_are_broad,
     open_managed_plaintext,
     read_private_text,
+    read_regular_text,
     resolve_parent_path,
     write_private_text,
 )
 from azurator.inputs import SecretInputError
+from azurator.key_map import KeyMapError, build_key_map, parse_key_map
 from azurator.matching import MatchingError
 from azurator.models import (
     DiscoveredResource,
     Inventory,
     KeyAuthentication,
+    KeyMap,
     KeySlot,
     KeySlotSelection,
     MatchReport,
@@ -88,9 +93,14 @@ from azurator.operation import (
 )
 from azurator.planning import PlanningError
 from azurator.presentation import (
+    OutputDetail,
+)
+from azurator.presentation import (
     render_dotenv_permissions_warning as _render_dotenv_permissions_warning,
 )
-from azurator.presentation import render_export_intent as _render_export_intent
+from azurator.presentation import (
+    render_export_intent as _render_export_intent,
+)
 from azurator.presentation import (
     render_inventory as _render_inventory,
 )
@@ -100,14 +110,30 @@ from azurator.presentation import (
 from azurator.presentation import (
     render_matches as _render_matches,
 )
-from azurator.presentation import render_operation_cleanup as _render_operation_cleanup
-from azurator.presentation import render_operation_list as _render_operation_list
-from azurator.presentation import render_operation_show as _render_operation_show
-from azurator.presentation import render_plan as _render_plan
-from azurator.presentation import render_rotate_complete as _render_rotate_complete
-from azurator.presentation import render_rotate_intent as _render_rotate_intent
-from azurator.presentation import render_rotate_progress as _render_rotate_progress
-from azurator.presentation import render_support_catalog as _render_support_catalog
+from azurator.presentation import (
+    render_operation_cleanup as _render_operation_cleanup,
+)
+from azurator.presentation import (
+    render_operation_list as _render_operation_list,
+)
+from azurator.presentation import (
+    render_operation_show as _render_operation_show,
+)
+from azurator.presentation import (
+    render_plan as _render_plan,
+)
+from azurator.presentation import (
+    render_rotate_complete as _render_rotate_complete,
+)
+from azurator.presentation import (
+    render_rotate_intent as _render_rotate_intent,
+)
+from azurator.presentation import (
+    render_rotate_progress as _render_rotate_progress,
+)
+from azurator.presentation import (
+    render_support_catalog as _render_support_catalog,
+)
 from azurator.presentation import (
     service_label as _service_label,
 )
@@ -132,17 +158,17 @@ from azurator.workflows import RotationPlanningWorkflow
 
 app = typer.Typer(
     name="azurator",
-    help="Find, export, plan, and safely rotate shared-key credentials for Azure services.",
+    help="Rotate shared keys for Azure services and update supported places that store them.",
     no_args_is_help=True,
     pretty_exceptions_enable=False,
 )
-auth_app = typer.Typer(help="Inspect or clear Azurator's authentication selection.", no_args_is_help=True)
+auth_app = typer.Typer(help="Inspect or clear Azurator's saved sign-in selection.", no_args_is_help=True)
 app.add_typer(auth_app, name="auth")
-operation_app = typer.Typer(help="Inspect retained local rotation recovery state.", no_args_is_help=True)
+operation_app = typer.Typer(help="Inspect retained local rotation state.", no_args_is_help=True)
 app.add_typer(operation_app, name="operation")
 
 
-_MAX_PLAN_ARTIFACT_BYTES = MAX_OPERATION_ARTIFACT_BYTES
+_MAX_JSON_ARTIFACT_BYTES = MAX_OPERATION_ARTIFACT_BYTES
 
 
 class _EphemeralStringIO(StringIO):
@@ -176,10 +202,26 @@ def main(
         is_eager=True,
         help="Show the installed version and exit.",
     ),
+    verbose: int = typer.Option(
+        0,
+        "--verbose",
+        "-v",
+        count=True,
+        metavar="",
+        show_default=False,
+        help="Show inspection details. Repeat to include warning metadata.",
+    ),
 ) -> None:
-    """Find and safely rotate shared-key credentials for Azure services."""
+    """Rotate shared keys for Azure services and update supported places that store them."""
 
-    del version
+    del version, verbose
+
+
+def _output_detail(context: typer.Context) -> OutputDetail:
+    """Resolve the root verbosity count for one human-rendered command."""
+
+    value = context.find_root().params.get("verbose", 0)
+    return OutputDetail.from_count(value if isinstance(value, int) else 0)
 
 
 def _auth_store() -> AuthStore:
@@ -342,7 +384,7 @@ def _authentication_failure(error: BaseException) -> NoReturn:
         _fail("Microsoft Entra authentication failed; run 'azurator login' and check tenant access")
     if isinstance(error, AuthError):
         _fail(str(error))
-    _fail("authentication failed; response details were suppressed")
+    _fail("authentication failed")
 
 
 def _resolve_subscription(value: str | None) -> SubscriptionSelection:
@@ -375,17 +417,18 @@ def _resolve_plan_subscription(value: str | None) -> SubscriptionSelection:
 
 @app.command()
 def login(
+    context: typer.Context,
     method: AuthMethod = typer.Option(
         AuthMethod.azure_cli,
         "--method",
         case_sensitive=False,
-        help="Authentication host: azure-cli, browser, device-code, or environment.",
+        help="Sign-in method: azure-cli, browser, device-code, or environment.",
     ),
     tenant: str | None = typer.Option(None, "--tenant", help="Optional Microsoft Entra tenant ID or domain."),
     subscription: str | None = typer.Option(
         None,
         "--subscription",
-        help="Optional subscription UUID used to verify the selected Azure CLI account.",
+        help="Optional subscription UUID to select after sign-in.",
     ),
     client_id: str | None = typer.Option(
         None,
@@ -404,7 +447,7 @@ def login(
         help="Registered localhost redirect URI for native browser login.",
     ),
 ) -> None:
-    """Sign in and remember the authentication method without storing passwords."""
+    """Sign in and remember the selected subscription."""
 
     selected_subscription = _validate_subscription(subscription) if subscription else None
     try:
@@ -419,7 +462,8 @@ def login(
     except (AuthError, AuthenticationRequiredError, ClientAuthenticationError, CredentialUnavailableError) as error:
         _authentication_failure(error)
 
-    tenant_suffix = f" in tenant {result.tenant_id}" if result.tenant_id else ""
+    detail = _output_detail(context)
+    tenant_suffix = f" in tenant {result.tenant_id}" if result.tenant_id and detail >= OutputDetail.verbose else ""
     subscription_suffix = (
         f" for subscription {_subscription_label(result.subscription_id, result.subscription_name)}"
         if result.subscription_id
@@ -430,10 +474,11 @@ def login(
 
 @auth_app.command("status")
 def auth_status(
+    context: typer.Context,
     subscription: str | None = typer.Option(
         None,
         "--subscription",
-        help="Azure subscription UUID override; defaults to the selection pinned at login.",
+        help="Azure subscription UUID for this command; defaults to the selection made during login.",
     ),
     json_output: bool = typer.Option(
         False,
@@ -441,7 +486,7 @@ def auth_status(
         help="Print the verified authentication status as JSON.",
     ),
 ) -> None:
-    """Verify that the active adapter can acquire an Azure management token."""
+    """Verify sign-in and show the selected subscription."""
 
     selected_subscription = _resolve_subscription(subscription)
     try:
@@ -467,11 +512,13 @@ def auth_status(
         f"Authentication is ready via {method.value} for subscription "
         f"{_subscription_label(selected_subscription.subscription_id, selected_subscription.name)}."
     )
+    if _output_detail(context) >= OutputDetail.verbose and selected_subscription.tenant_id:
+        typer.echo(f"Tenant {selected_subscription.tenant_id}.")
 
 
 @auth_app.command("clear")
 def auth_clear() -> None:
-    """Forget Azurator's saved adapter and subscription selection."""
+    """Forget Azurator's saved sign-in method and subscription selection."""
 
     try:
         removed = _auth_store().clear()
@@ -485,6 +532,7 @@ def auth_clear() -> None:
 
 @operation_app.command("list")
 def list_operations(
+    context: typer.Context,
     json_output: bool = typer.Option(
         False,
         "--json",
@@ -500,11 +548,12 @@ def list_operations(
     if json_output:
         typer.echo(json.dumps(report.model_dump(mode="json"), indent=2))
         return
-    _render_operation_list(report)
+    _render_operation_list(report, detail=_output_detail(context))
 
 
 @operation_app.command("show")
 def show_operation(
+    context: typer.Context,
     operation_id: UUID = typer.Argument(
         ...,
         metavar="OPERATION_ID",
@@ -516,7 +565,7 @@ def show_operation(
         help="Print the secret-free retained-operation detail as JSON.",
     ),
 ) -> None:
-    """Show one local recovery operation without contacting Azure."""
+    """Show one retained rotation and its resume command."""
 
     try:
         summary = OperationCatalog(_operation_root()).show(operation_id)
@@ -525,11 +574,12 @@ def show_operation(
     if json_output:
         typer.echo(json.dumps(summary.model_dump(mode="json"), indent=2))
         return
-    _render_operation_show(summary)
+    _render_operation_show(summary, detail=_output_detail(context))
 
 
 @app.command("list")
 def list_supported_types(
+    context: typer.Context,
     key_resources: bool = typer.Option(
         False,
         "--key-resources",
@@ -564,24 +614,26 @@ def list_supported_types(
         catalog,
         show_key_resources=show_key_resources,
         show_bindings=show_bindings,
+        detail=_output_detail(context),
     )
 
 
 @app.command()
 def discover(
+    context: typer.Context,
     subscription: str | None = typer.Option(
         None,
         "--subscription",
-        help="Azure subscription UUID override; defaults to the selection pinned at login.",
+        help="Azure subscription UUID for this command; defaults to the selection made during login.",
     ),
     json_output: bool = typer.Option(
         False,
         "--json",
         help="Print the complete inventory as JSON instead of a table.",
     ),
-    out: Path | None = typer.Option(None, "--out", help="Write the complete JSON inventory to a private file."),
+    out: Path | None = typer.Option(None, "--out", help="Write the complete JSON inventory to this path."),
 ) -> None:
-    """Enumerate supported Azure key resources using metadata-only operations."""
+    """List supported Azure key resources without retrieving their values."""
 
     selected_subscription = _resolve_subscription(subscription)
 
@@ -597,7 +649,7 @@ def discover(
     ) as error:
         _authentication_failure(error)
     except HttpResponseError:
-        _fail("Azure discovery failed; response details were suppressed")
+        _fail("Azure key-resource discovery failed")
 
     if json_output or out is not None:
         payload = inventory.model_dump_json(indent=2) + "\n"
@@ -608,18 +660,19 @@ def discover(
                 write_private_text(out, payload)
             except (OSError, UnsafeOutputPathError):
                 _fail("could not safely write the inventory output")
-            typer.echo(f"Wrote metadata-only inventory to {out}.")
+            typer.echo(f"Wrote inventory to {out}.")
         return
 
-    _render_inventory(inventory)
+    _render_inventory(inventory, detail=_output_detail(context))
 
 
 @app.command("match")
 def match_keys(
+    context: typer.Context,
     subscription: str | None = typer.Option(
         None,
         "--subscription",
-        help="Azure subscription UUID override; defaults to the selection pinned at login.",
+        help="Azure subscription UUID for this command; defaults to the selection made during login.",
     ),
     stdin_input: bool = typer.Option(
         False,
@@ -629,20 +682,17 @@ def match_keys(
     env_file: Path | None = typer.Option(
         None,
         "--env-file",
-        help="Read one existing plaintext dotenv file and report the assignments a file plan would manage.",
+        help="Read dotenv assignments from one existing plaintext file.",
     ),
     sops_file: Path | None = typer.Option(
         None,
         "--sops-file",
-        help="Decrypt one SOPS-encrypted dotenv file in memory and report its managed assignments.",
+        help="Decrypt dotenv assignments from one SOPS file in memory.",
     ),
     skip_azure_bindings: bool = typer.Option(
         False,
         "--skip-azure-bindings",
-        help=(
-            "Skip all Azure credential-binding inspection. Skipped bindings cannot be included or updated; "
-            "explicit local files remain included."
-        ),
+        help=("Do not inspect Azure credential bindings. Explicitly selected local files remain included."),
     ),
     matrix: bool = typer.Option(
         False,
@@ -654,8 +704,13 @@ def match_keys(
         "--json",
         help="Print the complete secret-free match report as JSON.",
     ),
+    key_map_out: Path | None = typer.Option(
+        None,
+        "--key-map-out",
+        help="Write confirmed selector-to-key-slot mappings as reusable JSON.",
+    ),
 ) -> None:
-    """Compare stdin, plaintext-file, or SOPS-file dotenv values with supported Azure key slots."""
+    """Find Azure key slots matching dotenv values from standard input or a file."""
 
     source_count = int(stdin_input) + int(env_file is not None) + int(sops_file is not None)
     if source_count > 1:
@@ -664,6 +719,18 @@ def match_keys(
         _fail("select one input mode: --stdin, --env-file, or --sops-file")
     if matrix and json_output:
         _fail("--matrix and --json cannot be used together")
+    if key_map_out is not None and json_output:
+        _fail("--key-map-out and --json cannot be used together")
+    managed_source = env_file or sops_file
+    if (
+        managed_source is not None
+        and key_map_out is not None
+        and _paths_refer_to_same_file(
+            managed_source,
+            key_map_out,
+        )
+    ):
+        _fail("--key-map-out must not refer to the dotenv input file")
     if stdin_input and sys.stdin.isatty():
         _fail("refusing to read raw values from an interactive terminal; pipe or redirect dotenv input")
 
@@ -699,7 +766,7 @@ def match_keys(
             _fail("the SOPS dotenv file is missing, unsafe, invalid, or could not be decrypted")
         _fail("the dotenv input file is missing, unsafe, or invalid")
     except MatchingError:
-        _fail("matching stopped because a supported integration returned an unexpected result")
+        _fail("matching stopped because an integration returned data outside its supported format")
     except (
         AuthConfigurationError,
         AuthenticationRequiredError,
@@ -708,15 +775,32 @@ def match_keys(
     ) as error:
         _authentication_failure(error)
     except HttpResponseError:
-        _fail("Azure matching failed; response details were suppressed")
+        _fail("Azure key matching failed")
+
+    key_map: KeyMap | None = None
+    if key_map_out is not None:
+        try:
+            key_map = build_key_map(report)
+            payload = key_map.model_dump_json(indent=2) + "\n"
+            if len(payload.encode("utf-8")) > _MAX_JSON_ARTIFACT_BYTES:
+                _fail("the generated key map exceeds the supported artifact size limit")
+            write_private_text(key_map_out, payload)
+        except KeyMapError as error:
+            _fail(str(error))
+        except (OSError, UnicodeError, UnsafeOutputPathError):
+            _fail("could not safely write the key-map output")
 
     if json_output:
         typer.echo(report.model_dump_json(indent=2))
         return
     if matrix:
-        _render_match_matrix(report)
-        return
-    _render_matches(report)
+        _render_match_matrix(report, detail=_output_detail(context))
+    else:
+        _render_matches(report, detail=_output_detail(context))
+    if key_map is not None and key_map_out is not None:
+        count = len(key_map.mappings)
+        noun = "mapping" if count == 1 else "mappings"
+        typer.echo(f"Wrote {count} confirmed key {noun} to {key_map_out.expanduser()}.")
 
 
 def _parse_selection_numbers(value: str, option_count: int) -> tuple[int, ...]:
@@ -864,6 +948,7 @@ def _prompt_key_slot_selection(
     heading: str = "Select Azure key slots for rotation",
     noninteractive_hint: str = "use --select, --stdin, --env-file, or --sops-file instead",
     require_rotatable: bool = True,
+    detail: OutputDetail = OutputDetail.normal,
 ) -> tuple[KeySlotSelection, ...]:
     """Render a metadata-only picker on the terminal and return explicit identities."""
 
@@ -879,7 +964,8 @@ def _prompt_key_slot_selection(
     console.print(f"[bold]{escape(heading)}[/bold]")
     subscription = escape(_subscription_label(inventory.subscription_id, inventory.subscription_name))
     console.print(f"[dim]Subscription {subscription}[/dim]")
-    console.print("[dim]This list contains metadata only; no key value is displayed.[/dim]")
+    if detail >= OutputDetail.verbose:
+        console.print("[dim]Only resource and slot metadata is shown.[/dim]")
     console.print()
     table = Table()
     table.add_column("#", justify="right")
@@ -914,20 +1000,21 @@ def _prompt_key_slot_selection(
 
 @app.command("export")
 def export_keys(
+    context: typer.Context,
     out: Path | None = typer.Option(
         None,
         "--out",
-        help="Exclusively create this private plaintext dotenv file.",
+        help="Create a new plaintext dotenv file at this path.",
     ),
     sops_out: Path | None = typer.Option(
         None,
         "--sops-out",
-        help="Exclusively create this private SOPS-encrypted dotenv file.",
+        help="Create a new SOPS-encrypted dotenv file at this path.",
     ),
     subscription: str | None = typer.Option(
         None,
         "--subscription",
-        help="Azure subscription UUID override; defaults to the selection pinned at login.",
+        help="Azure subscription UUID for this command; defaults to the selection made during login.",
     ),
     all_slots: bool = typer.Option(
         False,
@@ -939,14 +1026,19 @@ def export_keys(
         "--select",
         help="Select one exact ARM_RESOURCE_ID#SLOT; repeat for multiple slots.",
     ),
+    key_map_file: Path | None = typer.Option(
+        None,
+        "--key-map",
+        help="Export the exact selectors and Azure key slots from a key-map JSON file.",
+    ),
     yes: bool = typer.Option(
         False,
         "--yes",
         "-y",
-        help="Accept the displayed export intent without prompting.",
+        help="Skip the final confirmation. Selection and destination checks still apply.",
     ),
 ) -> None:
-    """Write selected Azure key slots to one new plaintext or SOPS dotenv file."""
+    """Export selected Azure key slots to a new plaintext or SOPS dotenv file."""
 
     selector_values = tuple(selectors or ())
     if out is not None and sops_out is not None:
@@ -955,10 +1047,11 @@ def export_keys(
     if output_option is None:
         _fail("select one export destination: --out for plaintext or --sops-out for SOPS encryption")
     encrypted = sops_out is not None
-    if all_slots and selector_values:
-        _fail("--all and --select cannot be used together")
-    if not all_slots and not selector_values and not _interactive_terminal_available():
-        _fail("interactive key selection requires a terminal; use --select or --all instead")
+    selection_modes = int(all_slots) + int(bool(selector_values)) + int(key_map_file is not None)
+    if selection_modes > 1:
+        _fail("--all, --select, and --key-map cannot be used together")
+    if selection_modes == 0 and not _interactive_terminal_available():
+        _fail("interactive key selection requires a terminal; use --select, --all, or --key-map instead")
 
     try:
         destination = resolve_parent_path(output_option)
@@ -974,7 +1067,21 @@ def export_keys(
     else:
         _fail("refusing to replace an existing dotenv export destination")
 
+    loaded_key_map: KeyMap | None = None
+    if key_map_file is not None:
+        try:
+            loaded_key_map = parse_key_map(read_regular_text(key_map_file, max_bytes=_MAX_JSON_ARTIFACT_BYTES))
+        except KeyMapError as error:
+            _fail(str(error))
+        except (OSError, UnicodeError, UnsafeInputPathError):
+            _fail("the key-map file is missing, unsafe, too large, or invalid")
+
     selected_subscription = _resolve_subscription(subscription)
+    if (
+        loaded_key_map is not None
+        and loaded_key_map.subscription_id.casefold() != selected_subscription.subscription_id.casefold()
+    ):
+        _fail("the selected Azure subscription does not match the subscription recorded in the key map")
     try:
         direct_selections = (
             _parse_key_slot_selectors(selector_values, selected_subscription.subscription_id)
@@ -995,9 +1102,16 @@ def export_keys(
     ) as error:
         _authentication_failure(error)
     except HttpResponseError:
-        _fail("Azure export discovery failed; response details were suppressed")
+        _fail("Azure key-resource discovery for export failed")
 
-    if all_slots:
+    assignments: tuple[DotenvExportAssignment, ...] | None = None
+    selections: tuple[KeySlotSelection, ...] | None = None
+    if loaded_key_map is not None:
+        try:
+            assignments = build_key_map_export_assignments(inventory, loaded_key_map)
+        except ExportError as error:
+            _fail(str(error))
+    elif all_slots:
         options = _key_slot_options(inventory, require_rotatable=False)
         if not options:
             _fail("no exportable key slots were found among supported key resources")
@@ -1019,21 +1133,32 @@ def export_keys(
             heading="Select Azure key slots to export",
             noninteractive_hint="use --all for an explicit complete export",
             require_rotatable=False,
+            detail=_output_detail(context),
         )
 
-    try:
-        assignments = build_dotenv_export_assignments(inventory, selections)
-    except ExportError as error:
-        _fail(str(error))
+    if assignments is None:
+        if selections is None:
+            _fail("no Azure key slots were selected for export")
+        try:
+            assignments = build_dotenv_export_assignments(inventory, selections)
+        except ExportError as error:
+            _fail(str(error))
 
-    _render_export_intent(assignments, destination, selected_subscription, encrypted=encrypted)
+    detail = _output_detail(context)
+    _render_export_intent(
+        assignments,
+        destination,
+        selected_subscription,
+        encrypted=encrypted,
+        detail=detail,
+    )
     confirmation = (
         "Encrypt these Azure keys into the displayed SOPS dotenv file?"
         if encrypted
         else "Write these Azure keys to the displayed plaintext dotenv file?"
     )
     if not yes and not _confirm_mutation(confirmation):
-        typer.echo("Export cancelled; no key values were retrieved and no file was written.")
+        typer.echo("Export cancelled.")
         return
 
     payload = ""
@@ -1064,13 +1189,13 @@ def export_keys(
     ) as error:
         _authentication_failure(error)
     except ProviderOperationError:
-        _fail("Azure key export failed while reading a selected key resource; no dotenv file was written")
+        _fail("Azure key export failed while reading a selected key resource; no file was created")
     except (HttpResponseError, ServiceRequestError, ServiceResponseError):
-        _fail("Azure key export failed; response details were suppressed and no dotenv file was written")
+        _fail("Azure key export failed; no file was created")
     except SopsError:
-        _fail("SOPS could not create and verify the encrypted dotenv export; no file was written")
+        _fail("SOPS could not create and verify the encrypted dotenv export; no file was created")
     except ExportError as error:
-        _fail(f"{error}; no dotenv file was written")
+        _fail(f"{error}; no file was created")
     except PrivateFileExistsError:
         _fail("the dotenv export destination appeared concurrently; no file was replaced")
     except (OSError, UnicodeError, UnsafeOutputPathError):
@@ -1079,17 +1204,28 @@ def export_keys(
         payload = ""
         ciphertext[:] = b"\x00" * len(ciphertext)
 
-    count = len(assignments)
-    noun = "key slot" if count == 1 else "key slots"
+    slot_count = len({(assignment.resource.resource_id.casefold(), assignment.key_slot) for assignment in assignments})
+    slot_noun = "key slot" if slot_count == 1 else "key slots"
+    assignment_count = len(assignments)
+    alias_summary = ""
+    if assignment_count != slot_count:
+        assignment_noun = "assignment" if assignment_count == 1 else "assignments"
+        alias_summary = f" as {assignment_count} dotenv {assignment_noun}"
     if encrypted:
-        typer.echo(f"Exported {count} Azure {noun} to private SOPS-encrypted dotenv file {destination}.")
-        typer.echo("Key values were encrypted before the file was written and were not printed.")
+        typer.echo(
+            f"Exported {slot_count} Azure {slot_noun}{alias_summary} to SOPS-encrypted dotenv file {destination}."
+        )
+        if detail >= OutputDetail.verbose:
+            typer.echo("Key values were encrypted before the file was written and were not printed.")
     else:
-        typer.echo(f"Exported {count} Azure {noun} to private plaintext dotenv file {destination}.")
-        typer.echo("Key values were written only to that file and were not printed.")
+        typer.echo(f"Exported {slot_count} Azure {slot_noun}{alias_summary} to plaintext dotenv file {destination}.")
+        if detail >= OutputDetail.verbose:
+            typer.echo("Key values were written only to that file and were not printed.")
 
 
-def _rotation_planning_workflow() -> RotationPlanningWorkflow:
+def _rotation_planning_workflow(
+    detail: OutputDetail = OutputDetail.normal,
+) -> RotationPlanningWorkflow:
     """Bind command adapters to command-independent rotation planning."""
 
     return RotationPlanningWorkflow(
@@ -1098,7 +1234,7 @@ def _rotation_planning_workflow() -> RotationPlanningWorkflow:
         match_dotenv_file=_match_dotenv_file,
         match_sops_dotenv_file=_match_sops_dotenv_file,
         inspect_selection=_inspect_selection,
-        prompt_selection=_prompt_key_slot_selection,
+        prompt_selection=lambda inventory: _prompt_key_slot_selection(inventory, detail=detail),
         canonicalize_selection=_canonicalize_key_slot_selections,
     )
 
@@ -1112,8 +1248,9 @@ def _build_rotation_plan(
     direct_selections: tuple[KeySlotSelection, ...] | None,
     skip_azure_bindings: bool,
     stream: TextIO,
+    detail: OutputDetail = OutputDetail.normal,
 ) -> RotationPlan:
-    return _rotation_planning_workflow().build(
+    return _rotation_planning_workflow(detail).build(
         selected_subscription,
         stdin_input=stdin_input,
         env_file=env_file,
@@ -1126,10 +1263,11 @@ def _build_rotation_plan(
 
 @app.command()
 def plan(
+    context: typer.Context,
     subscription: str | None = typer.Option(
         None,
         "--subscription",
-        help="Azure subscription UUID override; defaults to the selection pinned at login.",
+        help="Azure subscription UUID for this command; defaults to the selection made during login.",
     ),
     stdin_input: bool = typer.Option(
         False,
@@ -1154,15 +1292,12 @@ def plan(
     skip_azure_bindings: bool = typer.Option(
         False,
         "--skip-azure-bindings",
-        help=(
-            "Skip all Azure credential-binding inspection. Skipped bindings cannot be included or updated; "
-            "explicit local files remain included."
-        ),
+        help=("Do not inspect Azure credential bindings. Explicitly selected local files remain included."),
     ),
     out: Path | None = typer.Option(
         None,
         "--out",
-        help="Write the generated secret-free JSON plan to this private file.",
+        help="Write the complete JSON plan to this path.",
     ),
     json_output: bool = typer.Option(
         False,
@@ -1170,7 +1305,7 @@ def plan(
         help="Print the complete secret-free JSON plan instead of the readable preview.",
     ),
 ) -> None:
-    """Plan from exact slots, stdin dotenv, or a managed plaintext or SOPS dotenv file."""
+    """Preview a rotation from selected slots or dotenv input."""
 
     selector_values = tuple(selectors or ())
     if json_output and out is not None:
@@ -1206,6 +1341,7 @@ def plan(
             direct_selections=direct_selections,
             skip_azure_bindings=skip_azure_bindings,
             stream=sys.stdin,
+            detail=_output_detail(context),
         )
     except DirectSelectionError as error:
         _fail(str(error))
@@ -1220,7 +1356,7 @@ def plan(
             _fail("the SOPS dotenv file is missing, unsafe, invalid, or could not be decrypted")
         _fail("the dotenv input file is missing, unsafe, or invalid")
     except MatchingError:
-        _fail("planning stopped because a supported integration returned an unexpected result")
+        _fail("planning stopped because an integration returned data outside its supported format")
     except PlanningError as error:
         _fail(str(error))
     except (
@@ -1231,7 +1367,7 @@ def plan(
     ) as error:
         _authentication_failure(error)
     except HttpResponseError:
-        _fail("Azure planning failed; response details were suppressed")
+        _fail("Azure rotation planning failed")
 
     payload = _rotation_plan_payload(rotation_plan)
     if json_output:
@@ -1249,28 +1385,35 @@ def plan(
         except (OSError, UnsafeOutputPathError):
             _fail("could not safely write the rotation plan")
 
-    _render_plan(rotation_plan, out.expanduser() if out is not None else None)
+    _render_plan(
+        rotation_plan,
+        out.expanduser() if out is not None else None,
+        detail=_output_detail(context),
+    )
 
 
 def _rebuild_plan(
     rotation_plan: RotationPlan,
     selected_subscription: SubscriptionSelection,
     stream: TextIO,
+    *,
+    detail: OutputDetail = OutputDetail.normal,
 ) -> RotationPlan:
-    return _rotation_planning_workflow().rebuild(rotation_plan, selected_subscription, stream)
+    return _rotation_planning_workflow(detail).rebuild(rotation_plan, selected_subscription, stream)
 
 
 @app.command("rotate")
 def rotate_keys(
+    context: typer.Context,
     plan_file: Path | None = typer.Option(
         None,
         "--plan",
-        help="Rotate from a private JSON plan previously written by 'azurator plan --out'.",
+        help="Rotate using a JSON plan created with 'azurator plan --out'.",
     ),
     subscription: str | None = typer.Option(
         None,
         "--subscription",
-        help="Subscription override for a generated plan; cannot replace a saved plan or operation scope.",
+        help="Subscription UUID for a new plan; saved plans and operations keep their recorded scope.",
     ),
     env_file: Path | None = typer.Option(
         None,
@@ -1290,29 +1433,26 @@ def rotate_keys(
     skip_azure_bindings: bool = typer.Option(
         False,
         "--skip-azure-bindings",
-        help=(
-            "Skip all Azure credential-binding inspection. Skipped bindings cannot be included or updated; "
-            "explicit local files remain included."
-        ),
+        help=("Do not inspect Azure credential bindings. Explicitly selected local files remain included."),
     ),
     stdin_input: bool = typer.Option(
         False,
         "--stdin",
-        help="Repeat dotenv matching for a saved or pristine-resume stdin-sourced plan.",
+        help="Re-read dotenv input required by a saved stdin-based plan or unstarted resume.",
     ),
     resume: UUID | None = typer.Option(
         None,
         "--resume",
-        help="Resume one retained private operation by its UUID.",
+        help="Resume one retained operation by its UUID.",
     ),
     yes: bool = typer.Option(
         False,
         "--yes",
         "-y",
-        help="Accept the validated executable plan and displayed warnings without prompting.",
+        help="Skip the final confirmation. Validation and blocking checks still apply.",
     ),
 ) -> None:
-    """Plan and rotate selected keys, or resume one interrupted operation."""
+    """Rotate selected keys or resume an unfinished rotation."""
 
     is_resume = resume is not None
     uses_shortcut = not is_resume and plan_file is None
@@ -1328,7 +1468,7 @@ def rotate_keys(
             "or --skip-azure-bindings"
         )
     if not is_resume and plan_file is not None and (env_file is not None or sops_file is not None):
-        _fail("--plan and managed-file shortcuts are separate rotation modes")
+        _fail("--plan cannot be combined with --env-file or --sops-file")
     if not is_resume and plan_file is not None and selector_values:
         _fail("--plan already contains its exact selection and cannot be combined with --select")
     if not is_resume and plan_file is not None and subscription is not None:
@@ -1383,6 +1523,7 @@ def rotate_keys(
                 direct_selections=direct_selections,
                 skip_azure_bindings=skip_azure_bindings,
                 stream=sys.stdin,
+                detail=_output_detail(context),
             )
         except DirectSelectionError as error:
             _fail(str(error))
@@ -1397,7 +1538,7 @@ def rotate_keys(
                 _fail("the SOPS dotenv file is missing, unsafe, invalid, or could not be decrypted")
             _fail("the dotenv input file is missing, unsafe, or invalid")
         except MatchingError:
-            _fail("rotation planning stopped because a supported integration returned an unexpected result")
+            _fail("rotation planning stopped because an integration returned data outside its supported format")
         except PlanningError as error:
             _fail(str(error))
         except (
@@ -1408,7 +1549,7 @@ def rotate_keys(
         ) as error:
             _authentication_failure(error)
         except HttpResponseError:
-            _fail("Azure rotation planning failed; response details were suppressed")
+            _fail("Azure rotation planning failed")
         operation_id = uuid4()
         operation_path = _automatic_operation_path(operation_id)
         store = OperationStore(operation_path, expected_operation_id=operation_id)
@@ -1417,9 +1558,9 @@ def rotate_keys(
     uses_stdin_source = rotation_plan.source_format is PlanSource.dotenv_stdin
     uses_file_source = rotation_plan.source_format in {PlanSource.dotenv_file, PlanSource.sops_dotenv_file}
     if not is_resume and uses_stdin_source and not stdin_input:
-        _fail("this stdin-sourced plan requires --stdin for fresh matching and drift checks")
+        _fail("this saved plan requires --stdin with the dotenv input used to create it")
     if not is_resume and not uses_stdin_source and stdin_input:
-        _fail("managed-file and direct-selection plans do not accept stdin input")
+        _fail("--stdin is accepted only for a saved stdin-based plan")
     if not selected_subscription.tenant_id:
         _fail("the tenant ID for the plan subscription is unavailable; run 'azurator login' again")
     if selected_subscription.tenant_id.casefold() != rotation_plan.tenant_id.casefold():
@@ -1440,6 +1581,7 @@ def rotate_keys(
                 stdin_input=stdin_input,
                 yes=yes,
                 stream=sys.stdin,
+                detail=_output_detail(context),
             )
         else:
             result = _start_rotation(
@@ -1452,6 +1594,7 @@ def rotate_keys(
                 shortcut_fresh_plan=shortcut_fresh_plan,
                 yes=yes,
                 stream=sys.stdin,
+                detail=_output_detail(context),
             )
         if result is None:
             return
@@ -1466,13 +1609,13 @@ def rotate_keys(
             _fail("the managed input file is missing, unsafe, or invalid")
         _fail("a required private input file could not be read safely")
     except MatchingError:
-        _fail("rotation stopped because a supported integration returned an unexpected result")
+        _fail("rotation stopped because an integration returned data outside its supported format")
     except PlanningError as error:
         _fail(str(error))
     except ExecutionError as error:
-        _rotation_failure(error, operation_id, operation_path)
+        _rotation_failure(error, operation_id, operation_path, detail=_output_detail(context))
     except OperationError as error:
-        _rotation_failure(error, operation_id, operation_path)
+        _rotation_failure(error, operation_id, operation_path, detail=_output_detail(context))
     except (
         AuthConfigurationError,
         AuthenticationRequiredError,
@@ -1481,10 +1624,15 @@ def rotate_keys(
     ) as error:
         _authentication_failure(error)
     except HttpResponseError:
-        _fail("Azure rotation failed; response details were suppressed")
+        _fail("Azure rotation failed")
 
     cleanup_error = _cleanup_completed_operation(store, result)
-    _render_rotate_complete(rotation_plan, operation_path, cleanup_error=cleanup_error)
+    _render_rotate_complete(
+        rotation_plan,
+        operation_path,
+        cleanup_error=cleanup_error,
+        detail=_output_detail(context),
+    )
 
 
 def _resume_rotation(
@@ -1497,28 +1645,29 @@ def _resume_rotation(
     stdin_input: bool,
     yes: bool,
     stream: TextIO,
+    detail: OutputDetail,
 ) -> OperationState | None:
     operation_snapshot = service.validate_operation(store)
     pristine = not operation_snapshot.completed_steps and operation_snapshot.pending_step is None
     uses_stdin_source = rotation_plan.source_format is PlanSource.dotenv_stdin
     if pristine and uses_stdin_source and not stdin_input:
-        _fail("this stdin-sourced operation has not started; resume requires --stdin")
+        _fail("this unstarted operation requires --stdin with its original dotenv input")
     if pristine and not uses_stdin_source and stdin_input:
-        _fail("managed-file and direct-selection plans do not accept stdin input")
+        _fail("--stdin is accepted only for an unstarted stdin-based operation")
     if not pristine and stdin_input:
         _fail("fresh stdin input is not accepted after a recorded Azure step has started")
-    fresh_plan = _rebuild_plan(rotation_plan, selected_subscription, stream) if pristine else None
+    fresh_plan = _rebuild_plan(rotation_plan, selected_subscription, stream, detail=detail) if pristine else None
     current_operation = service.validate_resume(store, fresh_plan=fresh_plan)
     if current_operation.status is OperationStatus.completed:
         cleanup_error = _cleanup_completed_operation(store, current_operation)
-        typer.echo(f"Operation {current_operation.operation_id} was already complete; no Azure call was made.")
-        _render_operation_cleanup(operation_path, cleanup_error)
+        typer.echo(f"Operation {current_operation.operation_id} was already complete.")
+        _render_operation_cleanup(operation_path, cleanup_error, detail=detail)
         return None
     if not pristine and rotation_plan.source_format is PlanSource.dotenv_file:
         if rotation_plan.source_path is None:
             _fail("the managed dotenv source path is unavailable")
         _warn_for_broad_dotenv_permissions(Path(rotation_plan.source_path))
-    _render_rotate_intent(rotation_plan, operation_path, resume=True)
+    _render_rotate_intent(rotation_plan, operation_path, resume=True, detail=detail)
     if not yes and not _confirm_mutation("Resume this Azure mutation sequence?"):
         typer.echo("Cancelled; no additional Azure operation was performed.")
         return None
@@ -1540,11 +1689,17 @@ def _start_rotation(
     shortcut_fresh_plan: RotationPlan | None,
     yes: bool,
     stream: TextIO,
+    detail: OutputDetail,
 ) -> OperationState | None:
     service.validate_plan(rotation_plan)
-    fresh_plan = shortcut_fresh_plan or _rebuild_plan(rotation_plan, selected_subscription, stream)
+    fresh_plan = shortcut_fresh_plan or _rebuild_plan(
+        rotation_plan,
+        selected_subscription,
+        stream,
+        detail=detail,
+    )
     service.validate_start(rotation_plan, fresh_plan)
-    _render_rotate_intent(rotation_plan, operation_path, resume=False)
+    _render_rotate_intent(rotation_plan, operation_path, resume=False, detail=detail)
     if not yes and not _confirm_mutation("Rotate these selected keys? Azure key regeneration cannot be rolled back."):
         typer.echo("Cancelled; no Azure resource was changed.")
         return None
@@ -1560,10 +1715,10 @@ def _start_rotation(
 
 def _load_rotation_plan(path: Path) -> RotationPlan:
     try:
-        payload = read_private_text(path, max_bytes=_MAX_PLAN_ARTIFACT_BYTES)
+        payload = read_private_text(path, max_bytes=_MAX_JSON_ARTIFACT_BYTES)
         return RotationPlan.model_validate_json(payload)
     except (OSError, UnicodeError, UnsafeInputPathError, ValidationError):
-        _fail("the plan file is missing, unsafe, or invalid; use a private file written by 'azurator plan --out'")
+        _fail("the plan file is missing, unsafe, or invalid; use a file written by 'azurator plan --out'")
 
 
 def _operation_root() -> Path:
@@ -1584,7 +1739,7 @@ def _prepare_operation_root() -> None:
 
 def _rotation_plan_payload(rotation_plan: RotationPlan) -> str:
     payload = rotation_plan.model_dump_json(indent=2) + "\n"
-    if len(payload.encode("utf-8")) > _MAX_PLAN_ARTIFACT_BYTES:
+    if len(payload.encode("utf-8")) > _MAX_JSON_ARTIFACT_BYTES:
         _fail(
             "the generated rotation plan exceeds the supported private artifact size limit; "
             "reduce the input or selection"
@@ -1600,7 +1755,13 @@ def _cleanup_completed_operation(store: OperationStore, operation: OperationStat
     return None
 
 
-def _rotation_failure(error: BaseException, operation_id: UUID, operation_path: Path) -> NoReturn:
+def _rotation_failure(
+    error: BaseException,
+    operation_id: UUID,
+    operation_path: Path,
+    *,
+    detail: OutputDetail,
+) -> NoReturn:
     try:
         operation = OperationStore(operation_path, expected_operation_id=operation_id).load()
         validate_operation_contract(operation)
@@ -1608,16 +1769,24 @@ def _rotation_failure(error: BaseException, operation_id: UUID, operation_path: 
         operation = None
     if operation is not None:
         resume_command = shlex.join(("azurator", "rotate", "--resume", str(operation_id)))
-        _fail(f"{error} Recovery state remains in {operation_path}. Resume with `{resume_command}`.")
+        typer.secho(f"Error: {error}", fg=typer.colors.RED, err=True)
+        typer.echo(f"Resume: {resume_command}", err=True)
+        if detail >= OutputDetail.verbose:
+            typer.echo(f"Recovery state: {operation_path}", err=True)
+        error_code = getattr(error, "code", None)
+        if detail >= OutputDetail.diagnostic and isinstance(error_code, str):
+            typer.echo(f"Code: {error_code}", err=True)
+        raise typer.Exit(code=1)
     try:
         operation_path.lstat()
     except OSError:
         pass
     else:
-        _fail(
-            f"{error} An operation entry remains in {operation_path}, but it is unsafe or invalid; "
-            "Azurator will not suggest a resume command."
-        )
+        typer.secho(f"Error: {error}", fg=typer.colors.RED, err=True)
+        typer.echo("An invalid recovery entry remains, so Azurator cannot suggest a resume command.", err=True)
+        if detail >= OutputDetail.verbose:
+            typer.echo(f"Recovery entry: {operation_path}", err=True)
+        raise typer.Exit(code=1)
     _fail(f"{error} No recovery state was written and no Azure resource was changed.")
 
 

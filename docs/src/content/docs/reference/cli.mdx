@@ -16,7 +16,7 @@ available in your installed version.
 | `azurator list` | Show the key-resource and configuration types supported by this build. |
 | `azurator discover` | List supported key resources without retrieving key values. |
 | `azurator match` | Find supported Azure key slots equal to supplied dotenv values. |
-| `azurator export` | Create a new plaintext or SOPS-encrypted dotenv file from selected slots. |
+| `azurator export` | Create a new plaintext or SOPS-encrypted dotenv file from selected slots or a key map. |
 | `azurator plan` | Preview a rotation without changing Azure or a file. |
 | `azurator rotate` | Build and execute a plan, execute a saved plan, or resume an operation. |
 | `azurator operation list` | List retained local recovery operations. |
@@ -100,6 +100,19 @@ before changing anything. Use `-y` or `--yes` to accept a valid displayed plan
 without the prompt. It cannot bypass a blocked plan, changed state, missing
 permissions, or input validation.
 
+## Output detail
+
+Human-readable output is concise by default. Add `-v` before the command for
+inspection scope and recovery details. Use `-vv` for additional secret-safe
+warning metadata when diagnosing a problem:
+
+```bash
+azurator -v discover
+azurator -vv match --env-file .env
+```
+
+Verbosity never prints raw keys. It does not change `--json` output.
+
 ## Machine-readable output
 
 Use `--json` with `list`, `discover`, `match`, `plan`, `auth status`, and the
@@ -111,6 +124,12 @@ Structured output never contains raw Azure keys. It can contain subscription
 IDs, ARM resource IDs, endpoints, configuration relationships, selector names,
 and local file paths, so review it before storing or sharing it.
 
+`match --key-map-out azurator.keys.json` instead writes only confirmed
+selector-to-resource-and-slot mappings. Use that artifact with
+`export --key-map azurator.keys.json`. A key map contains no values or local
+source path, but its Azure resource IDs and selector names remain infrastructure
+metadata.
+
 Contract IDs and versions in `list --json` describe Azurator's installed
 provider behavior. They are not Azure REST API or SDK versions.
 
@@ -121,6 +140,7 @@ Export requires exactly one new destination:
 ```bash
 azurator export --out keys.env
 azurator export --sops-out keys.enc.env
+azurator export --key-map azurator.keys.json --sops-out mapped-keys.enc.env
 ```
 
 See [Export Keys](../../guides/export-keys/) for selection and file guarantees.

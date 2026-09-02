@@ -3,6 +3,12 @@
 set -euo pipefail
 umask 077
 
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+readonly SCRIPT_DIR
+# The shared guard is checked separately.
+# shellcheck disable=SC1091
+source "$SCRIPT_DIR/scope.sh"
+
 readonly RESOURCE_GROUP_NAME="rg-azurator-live-test"
 readonly EXPECTED_FIXTURE_TAG="live-test"
 readonly EXPECTED_OWNER_TAG="azurator-repository"
@@ -98,6 +104,7 @@ load_account_scope() {
 
   [[ "$SUBSCRIPTION_ID" =~ ^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$ ]] \
     || fail "Azure CLI returned an invalid subscription ID"
+  require_live_test_subscription_allowed "$SUBSCRIPTION_ID" || exit 1
   [[ "$AZURE_ENVIRONMENT" == "AzureCloud" ]] \
     || fail "the reviewed live-test recovery workflow supports Azure public cloud only"
 }
@@ -482,8 +489,9 @@ main() {
     exit 2
   }
   require_runtime
-  require_empty_operation_catalog
+  load_live_test_subscription_allowlist || exit 1
   load_account_scope
+  require_empty_operation_catalog
 
   printf '%s\n' \
     'Guided Azurator live recovery test' \

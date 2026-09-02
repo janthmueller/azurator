@@ -303,7 +303,7 @@ def test_scriptable_export_rejects_all_as_a_second_selection_mode(
     )
 
     assert result.exit_code == 1
-    assert "--all and --select cannot be used together" in result.output
+    assert "--all, --select, and --key-map cannot be used together" in result.output
 
 
 def test_scriptable_export_rejects_unknown_slot_before_key_retrieval(

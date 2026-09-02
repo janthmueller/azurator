@@ -56,6 +56,8 @@ azurator plan --env-file .env
 - `azurator rotate --sops-file secrets.enc.env` updates a SOPS-encrypted dotenv file.
 - `azurator export --sops-out azure-keys.enc.env` creates a new SOPS-encrypted dotenv file.
 - `azurator export --out azure-keys.env` creates a new dotenv file from selected keys.
+- `azurator match --sops-file secrets.enc.env --key-map-out azurator.keys.json`
+  saves mappings for `azurator export --key-map azurator.keys.json --sops-out recreated.enc.env`.
 - `azurator discover` lists supported key resources without retrieving key values.
 
 ## Current Scope

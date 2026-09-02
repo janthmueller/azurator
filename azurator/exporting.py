@@ -17,7 +17,7 @@ from azurator.inputs import (
     render_dotenv_assignment,
     validate_dotenv_selector,
 )
-from azurator.models import DiscoveredResource, Inventory, KeyAuthentication, KeySlotSelection
+from azurator.models import DiscoveredResource, Inventory, KeyAuthentication, KeyMap, KeySlotSelection
 from azurator.providers.base import KeyReadingProvider
 from azurator.sops import MAX_SOPS_DOTENV_FILE_BYTES, SopsExportCommand
 
@@ -93,6 +93,52 @@ def build_dotenv_export_assignments(
     return tuple(assignments)
 
 
+def build_key_map_export_assignments(
+    inventory: Inventory,
+    key_map: KeyMap,
+) -> tuple[DotenvExportAssignment, ...]:
+    """Resolve one key map against the current exportable inventory."""
+
+    if inventory.subscription_id.casefold() != key_map.subscription_id.casefold():
+        raise ExportError("the key map belongs to a different Azure subscription")
+
+    resources: dict[str, DiscoveredResource] = {}
+    for resource in inventory.resources:
+        identity = resource.resource_id.casefold()
+        if identity in resources:
+            raise ExportError("Azure discovery returned one resource identity more than once")
+        resources[identity] = resource
+
+    assignments: list[DotenvExportAssignment] = []
+    for mapping in key_map.mappings:
+        resource = resources.get(mapping.key_resource_id.casefold())
+        if resource is None:
+            raise ExportError("a key-map entry references a resource outside the discovered inventory")
+        slots = {slot.name: slot for slot in resource.key_slots}
+        slot = slots.get(mapping.key_slot)
+        if (
+            resource.key_authentication is not KeyAuthentication.enabled
+            or len(slots) != 2
+            or len(slots) != len(resource.key_slots)
+            or any(not candidate.values_retrievable for candidate in resource.key_slots)
+            or slot is None
+            or not slot.values_retrievable
+        ):
+            raise ExportError("a key-map entry does not satisfy a supported retrievable key-pair contract")
+        try:
+            validate_dotenv_selector(mapping.selector)
+        except SecretInputError:
+            raise ExportError("a key-map selector violates the supported dotenv output contract") from None
+        assignments.append(
+            DotenvExportAssignment(
+                resource=resource,
+                key_slot=mapping.key_slot,
+                selector=mapping.selector,
+            )
+        )
+    return tuple(assignments)
+
+
 class DotenvExportService:
     """Read exact supported key pairs and render selected slots only."""
 
@@ -116,13 +162,10 @@ class DotenvExportService:
 
         grouped: dict[tuple[str, str], list[DotenvExportAssignment]] = defaultdict(list)
         seen_selectors: set[str] = set()
-        seen_identities: set[tuple[str, str]] = set()
         for assignment in assignments:
-            identity = (assignment.resource.resource_id, assignment.key_slot)
-            if assignment.selector in seen_selectors or identity in seen_identities:
-                raise ExportError("dotenv export assignments must have unique selectors and Azure key slots")
+            if assignment.selector in seen_selectors:
+                raise ExportError("dotenv export assignments must have unique selectors")
             seen_selectors.add(assignment.selector)
-            seen_identities.add(identity)
             if assignment.resource.provider not in self._providers:
                 raise ExportError("an export selection has no installed supported key-reading provider")
             try:
@@ -132,7 +175,7 @@ class DotenvExportService:
             grouped[(assignment.resource.provider, assignment.resource.resource_id)].append(assignment)
 
         validated_groups: list[
-            tuple[KeyReadingProvider, DiscoveredResource, dict[str, DotenvExportAssignment], tuple[str, ...]]
+            tuple[KeyReadingProvider, DiscoveredResource, dict[str, list[DotenvExportAssignment]], tuple[str, ...]]
         ] = []
         for (provider_name, _), resource_assignments in grouped.items():
             provider = self._providers[provider_name]
@@ -148,7 +191,9 @@ class DotenvExportService:
                 or any(not slot.values_retrievable for slot in resource.key_slots)
             ):
                 raise ExportError("an export resource violates the supported retrievable key-pair contract")
-            selected_by_slot = {assignment.key_slot: assignment for assignment in resource_assignments}
+            selected_by_slot: dict[str, list[DotenvExportAssignment]] = defaultdict(list)
+            for assignment in resource_assignments:
+                selected_by_slot[assignment.key_slot].append(assignment)
             if not set(selected_by_slot).issubset(declared_slots):
                 raise ExportError("an export assignment references an undeclared key slot")
             validated_groups.append((provider, resource, selected_by_slot, declared_slots))
@@ -162,15 +207,13 @@ class DotenvExportService:
                     if slot not in declared_slots or slot in consumed_slots:
                         raise ExportError("a provider violated its supported key-state callback contract")
                     consumed_slots.add(slot)
-                    assignment = selected_by_slot.get(slot)
-                    if assignment is None:
-                        return
-                    try:
-                        rendered[assignment.selector] = render_dotenv_assignment(assignment.selector, value) + "\n"
-                    except SecretInputError:
-                        raise ExportError(
-                            "an Azure key cannot be represented by the supported dotenv output contract"
-                        ) from None
+                    for assignment in selected_by_slot.get(slot, ()):
+                        try:
+                            rendered[assignment.selector] = render_dotenv_assignment(assignment.selector, value) + "\n"
+                        except SecretInputError:
+                            raise ExportError(
+                                "an Azure key cannot be represented by the supported dotenv output contract"
+                            ) from None
 
                 provider.use_key_state(subscription_id, resource, consume)
                 if consumed_slots != set(declared_slots):

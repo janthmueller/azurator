@@ -211,6 +211,31 @@ def test_export_reads_each_selected_resource_once_and_renders_only_selected_slot
     assert ai_provider.calls == [(SUBSCRIPTION_ID, ai.resource_id)]
 
 
+def test_export_renders_multiple_aliases_from_one_key_slot_with_one_resource_read() -> None:
+    storage = _resource(
+        "storage-one",
+        STORAGE_PROVIDER,
+        "Microsoft.Storage/storageAccounts",
+        ("key1", "key2"),
+    )
+    provider = FakeKeyReadingProvider(
+        STORAGE_PROVIDER,
+        {storage.resource_id: (("key1", "storage-secret-one"), ("key2", "storage-secret-two"))},
+    )
+    assignments = (
+        DotenvExportAssignment(storage, "key1", "PRIMARY_KEY"),
+        DotenvExportAssignment(storage, "key1", "PRIMARY_ALIAS"),
+        DotenvExportAssignment(storage, "key2", "SECONDARY_KEY"),
+    )
+
+    payload = DotenvExportService((provider,)).render(SUBSCRIPTION_ID, assignments)
+
+    assert payload == (
+        "PRIMARY_KEY='storage-secret-one'\nPRIMARY_ALIAS='storage-secret-one'\nSECONDARY_KEY='storage-secret-two'\n"
+    )
+    assert provider.calls == [(SUBSCRIPTION_ID, storage.resource_id)]
+
+
 @pytest.mark.parametrize(
     "selections",
     (

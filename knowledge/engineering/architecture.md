@@ -26,6 +26,7 @@ azurator/
 ├── files.py
 ├── fingerprints.py
 ├── inputs.py
+├── key_map.py
 ├── matching.py
 ├── models.py
 ├── operation.py
@@ -62,6 +63,8 @@ Production code lives directly in `azurator/`, with no `src/` wrapper.
   artifact.
 - `files.py`, `inputs.py`, `fingerprints.py`, and `sops.py` own the reviewed
   local secret and persistence boundaries.
+- `key_map.py` projects confirmed matches into the strict reusable secret-free
+  mapping artifact and validates that artifact when it is loaded.
 - `providers/` hides Azure or local discovery, matching, transition,
   verification, API-version, response-shape, and permission contracts behind
   explicit interfaces.
