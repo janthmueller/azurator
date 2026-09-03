@@ -20,6 +20,7 @@ azurator/
 ├── clients.py
 ├── cli.py
 ├── composition.py
+├── credential_values.py
 ├── discovery.py
 ├── execution.py
 ├── exporting.py
@@ -66,6 +67,10 @@ Production code lives directly in `azurator/`, with no `src/` wrapper.
   local secret and persistence boundaries.
 - `key_map.py` projects confirmed matches into the strict reusable secret-free
   mapping artifact and validates that artifact when it is loaded.
+- `credential_values.py` recognizes and updates the reviewed raw and structured
+  values that may hold one Azure key.
+- `exporting.py` resolves key-slot assignments and renders new plaintext or
+  SOPS dotenv documents.
 - `refreshing.py` owns strict all-or-nothing plaintext and SOPS dotenv refresh
   from current Azure values without rotation or recovery state.
 - `providers/` hides Azure or local discovery, matching, transition,

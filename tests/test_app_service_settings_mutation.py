@@ -44,6 +44,26 @@ def _managed_binding() -> CredentialBinding:
     return result.bindings[0]
 
 
+def _storage_connection_string(key: str, *, account_name: str = "storageone") -> str:
+    return f"DefaultEndpointsProtocol=https;AccountName={account_name};AccountKey={key};EndpointSuffix=core.windows.net"
+
+
+def _connection_string_binding() -> CredentialBinding:
+    operations = FakeWebAppOperations(
+        (FakeSite(),),
+        {
+            "example-app": {
+                "CONNECTION": _storage_connection_string("current-storage-key"),
+                "RAW_ALIAS": "current-storage-key",
+            }
+        },
+    )
+    provider, _, _ = make_provider(operations)
+    result = inspect_bindings(provider, storage_key="current-storage-key", include_cognitive=False)
+    assert len(result.bindings) == 1
+    return result.bindings[0]
+
+
 def test_app_service_update_replaces_only_selected_aliases_in_the_complete_dictionary() -> None:
     binding = _managed_binding()
     operations = FakeWebAppOperations(
@@ -82,6 +102,66 @@ def test_app_service_update_replaces_only_selected_aliases_in_the_complete_dicti
     assert operations.settings["example-app"] == operations.update_calls[0][2]
     assert operations.last_request is not None
     assert operations.last_request.properties is None
+    assert client.closed
+
+
+def test_app_service_update_preserves_storage_connection_string_fields() -> None:
+    binding = _connection_string_binding()
+    resource = make_storage_resource().model_copy(update={"resource_type": "microsoft.storage/STORAGEACCOUNTS"})
+    operations = FakeWebAppOperations(
+        settings={
+            "example-app": {
+                "CONNECTION": _storage_connection_string("current-storage-key"),
+                "RAW_ALIAS": "current-storage-key",
+                "UNRELATED": "preserve-me",
+            }
+        }
+    )
+    provider, client, _ = make_provider(operations)
+
+    provider.update_binding(
+        SUBSCRIPTION_ID,
+        binding,
+        resource,
+        "current-storage-key",
+        "replacement-storage-key",
+    )
+    provider.verify_binding(
+        SUBSCRIPTION_ID,
+        binding,
+        resource,
+        "replacement-storage-key",
+    )
+
+    assert operations.update_calls[0][2] == {
+        "CONNECTION": _storage_connection_string("replacement-storage-key"),
+        "RAW_ALIAS": "replacement-storage-key",
+        "UNRELATED": "preserve-me",
+    }
+    assert client.closed
+
+
+def test_app_service_update_blocks_a_connection_string_targeting_another_account() -> None:
+    binding = _connection_string_binding()
+    original = {
+        "CONNECTION": _storage_connection_string("current-storage-key", account_name="storagetwo"),
+        "RAW_ALIAS": "current-storage-key",
+    }
+    operations = FakeWebAppOperations(settings={"example-app": original})
+    provider, client, _ = make_provider(operations)
+
+    with pytest.raises(ProviderOperationError) as caught:
+        provider.update_binding(
+            SUBSCRIPTION_ID,
+            binding,
+            make_storage_resource(),
+            "current-storage-key",
+            "replacement-storage-key",
+        )
+
+    assert caught.value.code == "app-service-settings-binding-drift-detected"
+    assert operations.update_calls == []
+    assert operations.settings["example-app"] == original
     assert client.closed
 
 
@@ -271,6 +351,26 @@ def test_app_service_rejects_tampered_binding_metadata_before_constructing_a_cli
             SUBSCRIPTION_ID,
             binding,
             make_storage_resource(),
+            "current-storage-key",
+            "replacement-storage-key",
+        )
+
+    assert caught.value.code == "app-service-settings-operation-contract-invalid"
+    assert factory.subscription_calls == []
+    assert not client.closed
+
+
+def test_app_service_rejects_a_key_resource_with_mismatched_provider_identity() -> None:
+    binding = _managed_binding()
+    resource = make_storage_resource().model_copy(update={"provider": "azure-cognitive-services"})
+    operations = FakeWebAppOperations()
+    provider, client, factory = make_provider(operations)
+
+    with pytest.raises(ProviderOperationError) as caught:
+        provider.update_binding(
+            SUBSCRIPTION_ID,
+            binding,
+            resource,
             "current-storage-key",
             "replacement-storage-key",
         )

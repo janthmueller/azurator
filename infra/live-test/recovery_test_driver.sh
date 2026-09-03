@@ -206,7 +206,7 @@ run_azurator() {
         "  ]," \
       "  \"bindings\": [" \
       "    {\"provider\":\"azure-foundry-connections\",\"location\":\"azure\",\"management\":\"update-and-verify\",\"key_resource_id\":\"$STORAGE_ACCOUNT_ID\",\"key_slot\":\"key1\"}," \
-      "    {\"provider\":\"azure-app-service-settings\",\"location\":\"azure\",\"management\":\"update-and-verify\",\"scope_id\":\"$APP_SERVICE_ID\",\"key_resource_id\":\"$STORAGE_ACCOUNT_ID\",\"key_slot\":\"key1\",\"selectors\":[\"AZURATOR_STORAGE_ALIAS\",\"AZURATOR_STORAGE_KEY\"]}" \
+      "    {\"provider\":\"azure-app-service-settings\",\"location\":\"azure\",\"management\":\"update-and-verify\",\"scope_id\":\"$APP_SERVICE_ID\",\"key_resource_id\":\"$STORAGE_ACCOUNT_ID\",\"key_slot\":\"key1\",\"selectors\":[\"AZURATOR_STORAGE_ALIAS\",\"AZURATOR_STORAGE_CONNECTION\",\"AZURATOR_STORAGE_KEY\"]}" \
         "  ]" \
         "}"
       ;;

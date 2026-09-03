@@ -239,6 +239,15 @@ class KeyMapEntry(AzuratorModel):
     key_slot: str = Field(min_length=1)
 
 
+class DotenvKeyAssignment(AzuratorModel):
+    """One resolved, secret-free Azure key slot to dotenv selector assignment."""
+
+    resource: DiscoveredResource
+    resource_group: str = Field(min_length=1)
+    key_slot: str = Field(min_length=1)
+    selector: str = Field(min_length=1)
+
+
 class KeyMap(AzuratorModel):
     """A secret-free, reusable selector-to-Azure-key mapping artifact."""
 

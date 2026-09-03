@@ -275,7 +275,7 @@ def test_match_renders_app_service_setting_bindings_without_values(monkeypatch: 
                 *base.warnings,
                 DiscoveryWarning(
                     code="app-service-settings-binding-coverage-limited",
-                    message="Only exact whole application-setting values were inspected.",
+                    message="Raw keys and supported Storage connection strings were inspected.",
                     impact=WarningImpact.confirmation,
                     category=WarningCategory.credential_binding,
                     provider="azure-app-service-settings",
@@ -315,7 +315,7 @@ def test_match_renders_app_service_setting_bindings_without_values(monkeypatch: 
     assert "example-app" in result.stdout
     assert "STORAGE_KEY" in normalized
     assert "STORAGE_ALIAS" in normalized
-    assert "Only exact whole application-setting values were inspected" not in normalized
+    assert "Raw keys and supported Storage connection strings were inspected" not in normalized
     assert "restarts it and requires exclusive settings access" not in normalized
     assert "must-not-render" not in result.output
     assert app_id not in result.output
@@ -328,7 +328,7 @@ def test_match_renders_app_service_setting_bindings_without_values(monkeypatch: 
     verbose_normalized = " ".join(verbose.stdout.split())
 
     assert verbose.exit_code == 0
-    assert "Only exact whole application-setting values were inspected" in verbose_normalized
+    assert "Raw keys and supported Storage connection strings were inspected" in verbose_normalized
     assert "restarts it and requires exclusive settings access" in verbose_normalized
     assert "must-not-render" not in verbose.output
     assert app_id not in verbose.output

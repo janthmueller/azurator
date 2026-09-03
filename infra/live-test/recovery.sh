@@ -416,7 +416,7 @@ validate_final_plan() {
           | select(.scope_id | same_id($app_service_id))
           | select(.key_resource_id | same_id($storage_id))
           | select(.key_slot == "key1")
-          | select(.selectors == ["AZURATOR_STORAGE_ALIAS", "AZURATOR_STORAGE_KEY"])
+          | select(.selectors == ["AZURATOR_STORAGE_ALIAS", "AZURATOR_STORAGE_CONNECTION", "AZURATOR_STORAGE_KEY"])
         ]
         | length == 1
       )

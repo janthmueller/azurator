@@ -42,6 +42,8 @@ azurator rotate --env-file .env
 Azurator matches the file values to supported Azure keys, shows every planned
 change, asks once for confirmation, rotates the keys, and updates the file and
 supported Azure configuration that stores the same values.
+Storage keys may be stored either as raw values or in supported Shared Key
+connection strings.
 
 Inspect or preview first when needed:
 
@@ -68,7 +70,8 @@ Azurator rotates Storage Account keys and the `Key1` and `Key2` credentials
 exposed by Azure AI, Cognitive Services, and Azure OpenAI. When the same key is
 stored in a selected dotenv file, a supported Foundry project connection, or an
 App Service application setting, Azurator can update that configuration during
-the rotation.
+the rotation. Storage connection strings in supported dotenv and App Service
+settings keep their existing fields while `AccountKey` is replaced.
 
 Azurator checks only the documented configuration types. It does not discover
 every Azure secret or prove that a running workload uses a key.

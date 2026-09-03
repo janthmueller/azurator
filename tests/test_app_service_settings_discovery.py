@@ -10,10 +10,12 @@ from tests.app_service_test_support import (
     COGNITIVE_ID,
     SITE_ID,
     STORAGE_ID,
+    SUBSCRIPTION_ID,
     FakeSite,
     FakeWebAppOperations,
     inspect_bindings,
     make_provider,
+    make_storage_resource,
 )
 
 
@@ -180,13 +182,55 @@ def test_app_service_inspection_rejects_ambiguous_cross_resource_values() -> Non
     assert shared_key not in result.model_dump_json()
 
 
-def test_app_service_inspection_matches_only_complete_setting_values() -> None:
+def test_app_service_inspection_matches_documented_storage_connection_strings() -> None:
+    key = "storage-secret-sentinel=="
+    connection_string = (
+        f"DefaultEndpointsProtocol=https;AccountName=storageone;AccountKey={key};EndpointSuffix=core.windows.net"
+    )
+    operations = FakeWebAppOperations(
+        (FakeSite(),),
+        {"example-app": {"STORAGE_CONNECTION": connection_string}},
+    )
+    provider, _, _ = make_provider(operations)
+
+    result = inspect_bindings(provider, storage_key=key, include_cognitive=False)
+
+    assert len(result.bindings) == 1
+    assert result.bindings[0].key_resource_id == STORAGE_ID
+    assert result.bindings[0].key_slot == "key1"
+    assert result.bindings[0].selectors == ("STORAGE_CONNECTION",)
+    assert connection_string not in result.model_dump_json()
+    assert key not in result.model_dump_json()
+
+
+def test_app_service_inspection_treats_arm_resource_type_casing_as_identity_insensitive() -> None:
+    key = "storage-secret-sentinel=="
+    resource = make_storage_resource().model_copy(update={"resource_type": "microsoft.storage/STORAGEACCOUNTS"})
+    operations = FakeWebAppOperations((FakeSite(),), {"example-app": {"STORAGE_KEY": key}})
+    provider, _, _ = make_provider(operations)
+
+    result = provider.inspect_bindings(
+        SUBSCRIPTION_ID,
+        (resource,),
+        frozenset((resource.resource_id,)),
+        lambda resource_id, value: "key1" if resource_id == resource.resource_id and value == key else None,
+    )
+
+    assert len(result.bindings) == 1
+    assert result.bindings[0].key_resource_id == STORAGE_ID
+
+
+def test_app_service_inspection_ignores_values_outside_supported_value_forms() -> None:
     key = "storage-secret-sentinel"
     operations = FakeWebAppOperations(
         (FakeSite(),),
         {
             "example-app": {
                 "CONNECTION_STRING": f"AccountKey={key};EndpointSuffix=core.windows.net",
+                "WRONG_ACCOUNT": (
+                    "DefaultEndpointsProtocol=https;AccountName=storagetwo;"
+                    f"AccountKey={key};EndpointSuffix=core.windows.net"
+                ),
                 "JSON": f'{{"key":"{key}"}}',
                 "PREFIXED": f"prefix-{key}",
                 "KEY_VAULT": "@Microsoft.KeyVault(SecretUri=https://example.vault.azure.net/secrets/key)",

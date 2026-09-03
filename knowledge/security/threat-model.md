@@ -18,6 +18,8 @@ surface described in [product behavior](../product/behavior.md). It covers:
 - reviewed Storage and Cognitive Services key retrieval and regeneration;
 - Foundry, App Service, plaintext dotenv, and SOPS dotenv binding inspection
   and updates;
+- reviewed Azure Storage Shared Key connection-string parsing and exact
+  `AccountKey` replacement within those bindings;
 - exclusive plaintext and verified SOPS-encrypted dotenv export;
 - secret-free reusable key-map creation and map-driven export;
 - strict key-map-driven refresh of existing plaintext and SOPS dotenv files;
@@ -48,6 +50,8 @@ an explicitly selected local plaintext or SOPS dotenv binding.
 - raw account keys held transiently while constructing and verifying an
   encrypted dotenv export
 - raw account keys held transiently while refreshing existing dotenv bindings
+- raw account keys embedded in reviewed Storage connection strings while those
+  values are matched, updated, or verified
 - raw SOPS-decrypted values held transiently in process memory
 - the integrity of managed or newly exported SOPS ciphertext and its recipient
   metadata
@@ -73,6 +77,8 @@ account keys that existed around a rotation.
    and provider-declared slot per `--select`. SOPS replacement values travel to
    the exact reviewed command over stdin. Ordinary process arguments remain
    outside the raw-secret boundary.
+   A reviewed Storage connection string is treated as secret input in full;
+   only its `AccountName` and `AccountKey` fields receive semantic meaning.
 2. **Process memory boundary.** Raw values, Azure candidate values, the ephemeral
    HMAC key, and session fingerprints exist only in process memory for the
    shortest practical time.
@@ -98,6 +104,10 @@ account keys that existed around a rotation.
    matched names, site identity, target key resource, and slot may leave this
    ephemeral boundary. Unmatched values, complete dictionaries, and their
    fingerprints never enter reports, plans, operations, output, or exceptions.
+   Raw keys are compared as complete values. A Storage connection string is
+   accepted only through the reviewed exact grammar, constrained to its named
+   Storage account, and compared through its parsed `AccountKey`. Updates
+   replace only that exact field span.
    The official update replaces the complete dictionary and has no reviewed
    conditional-write token.
 6. **Persistent state boundary.** Plans, operations, logs, exceptions, and
@@ -125,6 +135,8 @@ account keys that existed around a rotation.
    The plan records the absolute path and selector names, never values, mode
    observations, or a reusable value digest. This mode deliberately provides no
    encryption at rest.
+   A selected assignment may be a raw key or a reviewed Storage connection
+   string. The latter retains every field except `AccountKey` during updates.
 8. **Plaintext dotenv export boundary.** `export --out` may create one new
    private regular file after metadata-only discovery, complete secret-free
    selection validation, destination validation, display, and confirmation.
@@ -142,6 +154,8 @@ account keys that existed around a rotation.
    current-user-owned regular non-symlink file no larger than 8 MiB and not
    writable by group or other users. Decrypted UTF-8 dotenv is limited to 1 MiB
    and remains in process memory. Azurator writes only ciphertext to disk.
+   Decrypted selected assignments use the same raw-key or reviewed Storage
+   connection-string contract as plaintext dotenv.
 10. **SOPS dotenv export boundary.** `export --sops-out` shares the plaintext
     export's discovery, selection, destination, display, confirmation, and
     key-provider checks. It validates the pinned SOPS executable before key
@@ -154,9 +168,11 @@ account keys that existed around a rotation.
     failure, and a destination race leave no destination.
 11. **Key-map refresh boundary.** `refresh` requires one strict key map and one
     existing plaintext or SOPS dotenv target. The selected subscription and
-    every resource, slot, and selector are validated before key retrieval. Every
-    mapped selector must already exist. Missing selectors block rather than
-    being added, and assignments absent from the map remain outside the update.
+    every resource, slot, and selector are validated before key retrieval. A
+    recognized connection string must name its mapped Storage account before
+    key retrieval. Every mapped selector must already exist. Missing selectors
+    block rather than being added, and assignments absent from the map remain
+    outside the update.
     After the complete secret-free intent is displayed and confirmed, reviewed
     providers read each mapped key resource once. Plaintext mode constructs one
     verified replacement in memory and atomically replaces only a still-identical
@@ -206,9 +222,11 @@ garbage collection.
 
 ### Correlation of values across runs
 
-Raw input is converted immediately with a fresh random 256-bit HMAC key. The key
-and derived session fingerprints are never persisted. Candidate comparisons use
-the same per-process key and a constant-time equality function.
+Each raw key candidate is converted immediately with a fresh random 256-bit
+HMAC key. For a reviewed Storage connection string, only its parsed
+`AccountKey` becomes a candidate and its account name constrains the resource.
+The key and derived session fingerprints are never persisted. Candidate
+comparisons use the same per-process key and a constant-time equality function.
 Direct binding and refresh comparisons encode valid UTF-8 strings into owned
 mutable buffers before constant-time comparison, then erase those buffers. A
 non-ASCII stale binding value is ordinary drift, not a comparison error.
@@ -318,7 +336,9 @@ key call.
 Every managed update additionally receives the expected current key and its
 replacement. A reviewed binding already storing the replacement completes as a
 no-op, one storing the expected value may transition, and every third value
-blocks as drift. App Service then copies the freshly read complete settings
+blocks as drift. For a reviewed Storage connection string these comparisons
+apply to `AccountKey`, while a changed account name or resource type is drift.
+App Service then copies the freshly read complete settings
 dictionary and changes only exact selected names. Another actor can still alter
 an unrelated setting between read and PUT, so affected plans require
 confirmation and forbid concurrent settings edits or deployments. Re-reading
@@ -342,6 +362,9 @@ and compared before the plan continues. This verifies the file, not a workload
 that may have loaded it. Its recorded path resolves every parent component but
 does not follow the final component, preventing a later parent-symlink retarget
 from selecting a different file.
+Raw aliases remain raw. A reviewed Storage connection-string alias retains its
+exact non-key fields and is verified against both its account identity and
+embedded `AccountKey`.
 The SOPS dotenv-file provider uses the same expected-value transition and bridge
 plan. It updates only a private encrypted temporary through `sops set
 --value-stdin`, requires the result to remain SOPS-encrypted, compares selected
@@ -505,10 +528,11 @@ metadata, displays the complete intent with each exact resource group and name,
 and confirms the local change.
 
 After confirmation, current values exist in memory only. Plaintext refresh
-rewrites only changed mapped assignments in one generated document. It preserves
-all other bytes, checks the generated mapped values, and atomically replaces the
-source only if its identity, metadata, size, and digest still match the read
-snapshot. SOPS refresh works on one same-directory private encrypted temporary.
+rewrites only changed mapped assignments in one generated document. Raw targets
+remain raw; reviewed Storage connection strings replace only `AccountKey`. It
+preserves all other bytes, checks the generated mapped values, and atomically
+replaces the source only if its identity, metadata, size, and digest still match
+the read snapshot. SOPS refresh works on one same-directory private encrypted temporary.
 It sets only changed mapped selectors over stdin, decrypts the result in memory,
 HMAC-verifies every mapped value and every unmapped assignment, and applies the
 same unchanged-source commit check. Any pre-commit failure leaves the source
@@ -563,10 +587,11 @@ identity backend, or host remains outside the protection boundary.
   connections. It cannot test workloads that may use them, and it does not
   inspect `AzureBlob`/container connections, account-level Foundry connections,
   or non-Foundry key configurations.
-- App Service coverage includes exact whole application-setting values on
-  visible top-level apps only. It excludes deployment slots, the separate
-  connection-string collection, embedded keys, Key Vault references, and apps
-  the current principal cannot enumerate or read. Settings updates replace the
+- App Service coverage includes exact raw keys and reviewed Storage Shared Key
+  connection strings in application settings on visible top-level apps only.
+  It excludes deployment slots, the separate connection-string collection,
+  unsupported embedded values, Key Vault references, and apps the current
+  principal cannot enumerate or read. Settings updates replace the
   complete dictionary, restart the app, and can overwrite a concurrent settings
   change because the reviewed API exposes no conditional-write token. Azurator
   verifies stored selected names, not workload health.

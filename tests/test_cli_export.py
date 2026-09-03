@@ -19,9 +19,8 @@ from typer.testing import CliRunner
 import azurator.cli as cli_module
 from azurator.auth import SubscriptionSelection
 from azurator.cli import app
-from azurator.exporting import DotenvExportAssignment
 from azurator.files import PrivateFileExistsError
-from azurator.models import Inventory
+from azurator.models import DotenvKeyAssignment, Inventory
 from azurator.providers.base import ProviderOperationError
 from azurator.sops import SopsError
 from tests.cli_test_support import (
@@ -38,12 +37,12 @@ class FakeExportService:
     def __init__(self, payload: str, error: Exception | None = None) -> None:
         self._payload = payload
         self._error = error
-        self.calls: list[tuple[str, tuple[DotenvExportAssignment, ...]]] = []
+        self.calls: list[tuple[str, tuple[DotenvKeyAssignment, ...]]] = []
 
     def render(
         self,
         subscription_id: str,
-        assignments: Sequence[DotenvExportAssignment],
+        assignments: Sequence[DotenvKeyAssignment],
     ) -> str:
         captured = tuple(assignments)
         self.calls.append((subscription_id, captured))

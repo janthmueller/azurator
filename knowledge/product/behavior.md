@@ -52,9 +52,11 @@ Azurator can identify, update, and verify these stored key copies:
 - public-cloud, project-level Foundry `AzureStorageAccount` connections using
   `AccountKey`;
 - public-cloud, project-level Foundry `AzureOpenAI` connections using `ApiKey`;
-- exact whole-value application settings on visible top-level App Service apps;
-- exact matched assignments in one explicitly selected plaintext dotenv file;
-- exact matched top-level assignments in one explicitly selected
+- exact raw keys or reviewed Storage Shared Key connection strings in
+  application settings on visible top-level App Service apps;
+- exact matched raw keys or reviewed Storage Shared Key connection strings in
+  one explicitly selected plaintext dotenv file;
+- the same top-level assignment forms in one explicitly selected
   SOPS-encrypted dotenv file.
 
 Export can exclusively create one new plaintext or SOPS-encrypted dotenv file
@@ -64,8 +66,10 @@ does not merge or replace a file.
 
 Refresh uses one strict key map to replace only its existing selectors in one
 explicit plaintext or SOPS-encrypted dotenv file with the current Azure values.
-It never adds missing selectors, changes unmapped assignments, rotates an Azure
-key, or creates a plan or recovery operation.
+Raw assignments remain raw. A reviewed Storage connection string retains every
+field except its `AccountKey` value. Refresh never adds missing selectors,
+changes unmapped assignments, rotates an Azure key, or creates a plan or
+recovery operation.
 
 Use three distinct domain terms throughout the implementation:
 
@@ -190,8 +194,11 @@ intent, identifying each key resource by resource group and name, and asks once
 for confirmation unless `-y` is supplied. Only after confirmation do installed
 reviewed key-reading providers read each mapped resource's exact two-slot state
 once. Mapped aliases are retained, already current assignments are not
-rewritten, and unmapped assignment values remain unchanged. Plaintext mode also
-preserves comments, ordering, and line endings.
+rewritten, and unmapped assignment values remain unchanged. Existing reviewed
+Storage connection strings preserve their representation and replace only
+`AccountKey`; a valid connection string naming another Storage account blocks
+before key retrieval. Plaintext mode also preserves comments, ordering, and
+line endings.
 
 Plaintext refresh builds and verifies one complete replacement in memory, then
 atomically replaces the still-identical current-user-owned source while
@@ -208,10 +215,12 @@ updates Azure bindings, creates a plan, or creates recovery state.
 
 `match` is read-only but explicitly crosses the key-retrieval boundary. Raw
 values arrive through stdin, one explicit user-owned `--env-file`, or in-memory
-decryption of one explicit `--sops-file`. They become per-run HMAC fingerprints
-and are compared with provider candidates in constant time. Its default output
-is a sparse match list; the optional matrix uses input selectors as rows and
-Azure resources, not provider implementations, as columns. Explicit
+decryption of one explicit `--sops-file`. Exact raw values become per-run HMAC
+fingerprints. For a reviewed Storage Shared Key connection string, only its
+`AccountKey` is fingerprinted and it may match only the named Storage account.
+Candidates are compared in constant time. Its default output is a sparse match
+list; the optional matrix uses input selectors as rows and Azure resources, not
+provider implementations, as columns. Explicit
 `--key-map-out` atomically writes a strict key-map JSON artifact containing only
 confirmed, unambiguous selector, complete ARM resource ID, and exact slot
 mappings. It fails rather than creating an empty or ambiguous map. Unmatched and
@@ -381,7 +390,8 @@ SOPS-encrypted dotenv file
   -> safe ciphertext snapshot
   -> sops 3.13.x decrypt with explicit dotenv input/output types
   -> plaintext dotenv in process memory
-  -> immediate per-run HMAC-SHA-256 matching
+  -> reviewed raw-key or Storage connection-string interpretation
+  -> immediate per-run HMAC-SHA-256 key matching
   -> managed local binding attribution
   -> sops set --value-stdin on an encrypted temporary during rotation
   -> in-memory verification and atomic ciphertext replacement
@@ -440,9 +450,10 @@ existing target, displays the full secret-free mapping and mode-specific
 warning, and confirms before it constructs key-reading clients or calls
 `listKeys`.
 
-After confirmation, each selected resource's exact reviewed pair is read once
-and only selected slots are rendered. The complete document must satisfy the
-strict canonical single-quoted dotenv and 1 MiB contracts. Plaintext mode
+After confirmation, each selected resource's exact reviewed pair is read once,
+and only selected slots are rendered as raw key assignments. The complete
+document must satisfy the strict canonical single-quoted dotenv and 1 MiB
+contracts. Plaintext mode
 writes it atomically and exclusively with mode `0600`. SOPS mode first validates
 the pinned executable, passes plaintext only over stdin, captures ciphertext
 only from stdout, and decrypts it in memory. A fresh `EphemeralFingerprinter`
@@ -500,10 +511,12 @@ Windows and non-mode-bit ACL or directory access are not inferred.
 
 During rotation, each grouped assignment set is a normal managed binding. Azurator
 writes the bridge key, re-reads and verifies every assignment, regenerates the
-selected Azure slot, then writes and verifies its new key. The strict parser and
-rewriter preserve unmatched assignments and comments, reject malformed or
-duplicate assignments, and emit selected values in one canonical single-quoted
-form while preserving each original LF, CRLF, or CR line ending. Writes use a
+selected Azure slot, then writes and verifies its new key. A raw assignment
+remains raw. A reviewed Storage connection string preserves its fields and
+replaces only `AccountKey`. The strict dotenv parser and rewriter preserve
+unmatched assignments and comments, reject malformed or duplicate assignments,
+and emit selected values in one canonical single-quoted form while preserving
+each original LF, CRLF, or CR line ending. Writes use a
 same-directory private temporary file, preserve the source POSIX mode, owner,
 and group, perform file `fsync`, atomic replacement, and parent-directory
 `fsync` where supported. A pending
@@ -561,8 +574,10 @@ bridges that authentication gap:
 App Service uses the same sequence, but its official update operation replaces
 the complete application-settings dictionary and provides no reviewed
 conditional-write token. Azurator copies the latest dictionary and changes only
-the exact matched names. Every update restarts the app, and the plan requires
-confirmation that no settings edit or deployment runs concurrently.
+the exact matched names. Raw keys remain raw; reviewed Storage connection
+strings retain every field except `AccountKey`. Every update restarts the app,
+and the plan requires confirmation that no settings edit or deployment runs
+concurrently.
 
 Credential-binding inspection is limited to installed reviewed providers.
 Within that scope, attempted inspection must complete or planning blocks.

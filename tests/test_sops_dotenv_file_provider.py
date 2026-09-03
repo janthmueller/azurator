@@ -144,6 +144,36 @@ def test_sops_provider_updates_grouped_assignments_and_preserves_other_values_an
     assert list(tmp_path.glob(".secrets.enc.env.azurator.*")) == []
 
 
+def test_sops_provider_preserves_storage_connection_string_assignments(tmp_path: Path) -> None:
+    path = tmp_path / "secrets.enc.env"
+    write_fake_sops_file(
+        path,
+        "PRIMARY_KEY='DefaultEndpointsProtocol=https;AccountName=accountone;"
+        "AccountKey=old-azure-key;EndpointSuffix=core.windows.net'\n"
+        "ALIAS_KEY=old-azure-key\n"
+        "UNRELATED=leave-me\n",
+    )
+    command = FakeSopsCommand()
+    provider = SopsDotenvFileProvider(command)
+    resource = _discovered_resource().model_copy(update={"resource_type": "microsoft.storage/STORAGEACCOUNTS"})
+
+    provider.update_binding(
+        SUBSCRIPTION_ID,
+        _binding(path),
+        resource,
+        "old-azure-key",
+        "new-azure-key",
+    )
+    provider.verify_binding(SUBSCRIPTION_ID, _binding(path), resource, "new-azure-key")
+
+    assert command.decrypt_dotenv(path) == (
+        "PRIMARY_KEY='DefaultEndpointsProtocol=https;AccountName=accountone;"
+        "AccountKey=new-azure-key;EndpointSuffix=core.windows.net'\n"
+        "ALIAS_KEY='new-azure-key'\n"
+        "UNRELATED=leave-me\n"
+    )
+
+
 def test_sops_provider_accepts_already_applied_transition_without_rewriting(tmp_path: Path) -> None:
     path = _encrypted_file(tmp_path)
     write_fake_sops_file(path, "PRIMARY_KEY=new-azure-key\nUNRELATED=leave-me\nALIAS_KEY=new-azure-key\n")
@@ -279,6 +309,25 @@ def test_sops_provider_rejects_group_writable_ciphertext_without_replacing_it(tm
 
     assert caught.value.code == "sops-file-update-failed"
     assert "replacement-secret" not in str(caught.value)
+    assert path.read_bytes() == original
+
+
+def test_sops_provider_rejects_a_key_resource_with_mismatched_provider_identity(tmp_path: Path) -> None:
+    path = _encrypted_file(tmp_path)
+    binding = _binding(path)
+    resource = _discovered_resource().model_copy(update={"provider": "azure-cognitive-services"})
+    original = path.read_bytes()
+
+    with pytest.raises(ProviderOperationError) as caught:
+        SopsDotenvFileProvider(FakeSopsCommand()).update_binding(
+            SUBSCRIPTION_ID,
+            binding,
+            resource,
+            "old-azure-key",
+            "replacement-secret",
+        )
+
+    assert caught.value.code == "sops-file-operation-contract-invalid"
     assert path.read_bytes() == original
 
 

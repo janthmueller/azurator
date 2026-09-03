@@ -34,28 +34,36 @@ rotate keys. Discovery does not test those later permissions.
 
 ## Credential bindings
 
-A credential binding is a separate configuration entry that stores one key
-value. A consumer or workload is a running application, deployment, model, or
-process that reads a binding. Finding a binding does not prove active workload
-use.
+A credential binding is a separate configuration entry that stores a key,
+either as a raw value or in a supported structured value. A consumer or
+workload is a running application, deployment, model, or process that reads a
+binding. Finding a binding does not prove active workload use.
 
 Azurator can update these bindings:
 
 | Location | Binding |
 | --- | --- |
-| Local | Exact matched assignments in one selected plaintext dotenv file. |
-| Local | Exact matched top-level assignments in one selected SOPS-encrypted dotenv file. |
+| Local | Matched raw keys or supported Storage Shared Key connection strings in one selected plaintext dotenv file. |
+| Local | The same top-level values in one selected SOPS-encrypted dotenv file. |
 | Azure | Public-cloud, project-level Foundry `AzureStorageAccount` connections using `AccountKey`. |
 | Azure | Public-cloud, project-level Foundry `AzureOpenAI` connections using `ApiKey`. |
-| Azure | Exact whole-value application settings on visible top-level App Service apps. |
+| Azure | Raw keys or supported Storage Shared Key connection strings in application settings on visible top-level App Service apps. |
 
 Foundry inspection identifies a stored connection record below a project. It
 does not prove that the project, a deployment, or a model actively uses it.
 
 For App Service, Azurator reads the complete application-settings dictionary
-and keeps only exact key matches. Updating it restarts the app and replaces the
-complete freshly read dictionary. Do not run concurrent settings edits or
-deployments. Deployment slots and connection strings are not inspected.
+and keeps only supported matches. This includes Function Apps because they use
+the same top-level Azure resource and application-settings API. Updating a
+dictionary restarts the app. Do not run concurrent settings edits or
+deployments. Deployment slots and App Service's separate connection-string
+collection are not inspected.
+
+The supported Storage connection-string form contains `AccountName` and
+`AccountKey`, plus the documented endpoint fields. Azurator matches it only to
+the named Storage Account and replaces only `AccountKey`. SAS, the
+`UseDevelopmentStorage=true` Azurite shortcut, identity-based, malformed, and
+arbitrary embedded values are not parsed.
 
 Azurator verifies binding values after every update. It does not invoke models,
 read application data, reload workloads, or perform health checks.
@@ -74,8 +82,9 @@ plaintext to disk. Neither mode overwrites an existing file.
 `azurator refresh` uses a key map to replace mapped values in one existing
 plaintext or SOPS dotenv file. It preserves unmapped assignment values and never
 adds a missing selector. Plaintext refresh also preserves the remaining file
-content. Refresh reads current keys but does not rotate them or update Azure-side
-bindings.
+content. An existing supported Storage connection string keeps its other fields
+and receives the current `AccountKey`. Exported values remain raw keys. Refresh
+reads current keys but does not rotate them or update Azure-side bindings.
 
 ## Not supported
 
@@ -83,7 +92,8 @@ bindings.
 - Microsoft Entra application client secrets
 - SAS tokens, passwords, certificates, and values Azure cannot retrieve after creation
 - unsupported Foundry connection types or scopes
-- App Service deployment slots, connection strings, and embedded values
+- App Service deployment slots, its separate connection-string collection, and
+  unsupported embedded values
 - Key Vault references, Container Apps, Kubernetes, pipelines, and arbitrary application configuration
 - workload reloads and health checks
 

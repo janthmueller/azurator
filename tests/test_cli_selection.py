@@ -12,8 +12,13 @@ from typer.testing import CliRunner
 import azurator.cli as cli_module
 from azurator.auth import SubscriptionSelection
 from azurator.cli import app
-from azurator.exporting import DotenvExportAssignment
-from azurator.models import CandidateInspectionStatus, Inventory, KeySlotSelection, SelectionReport
+from azurator.models import (
+    CandidateInspectionStatus,
+    DotenvKeyAssignment,
+    Inventory,
+    KeySlotSelection,
+    SelectionReport,
+)
 from tests.cli_test_support import (
     SUBSCRIPTION_ID,
     SUBSCRIPTION_NAME,
@@ -37,12 +42,12 @@ def _selector(slot: str = "key1", *, subscription_id: str = SUBSCRIPTION_ID) -> 
 
 class _FakeExportService:
     def __init__(self) -> None:
-        self.calls: list[tuple[str, tuple[DotenvExportAssignment, ...]]] = []
+        self.calls: list[tuple[str, tuple[DotenvKeyAssignment, ...]]] = []
 
     def render(
         self,
         subscription_id: str,
-        assignments: Sequence[DotenvExportAssignment],
+        assignments: Sequence[DotenvKeyAssignment],
     ) -> str:
         captured = tuple(assignments)
         self.calls.append((subscription_id, captured))

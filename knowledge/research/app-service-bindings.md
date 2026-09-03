@@ -22,10 +22,12 @@ providers, not universal Azure coverage.
 
 There is an important secret-boundary difference. Foundry exposes structured
 connection metadata, so Azurator can link a connection to a selected account
-before retrieving its credential. App Service application settings carry no
-target-resource relationship. Finding a match therefore requires retrieving
-the complete settings dictionary of every site, comparing each value, and
-discarding everything that does not match.
+before retrieving its credential. A raw App Service application-setting key
+has no target-resource relationship. A reviewed Storage Shared Key connection
+string supplies an account name but still requires key comparison. Finding
+either shape therefore requires retrieving the complete settings dictionary of
+every site, inspecting each value, and discarding everything that does not
+match.
 
 That broader ephemeral boundary is acceptable for binding inspection if
 it is explicit in the threat model, SDK body logging remains disabled, values
@@ -165,9 +167,13 @@ Supporting another cloud requires a separate endpoint and SDK-scope review.
 
 After Azurator has selected key resources and ephemerally loaded their reviewed
 two-slot values, it inspects each discovered site once. For every application
-setting it compares the entire value against each selected account key using
-the process-local HMAC and constant-time equality path. It finishes and releases
-one site's response before requesting the next site.
+setting it compares a raw value against each selected account key using the
+process-local HMAC and constant-time equality path. For a reviewed Storage
+Shared Key connection string it first restricts candidates to the named
+Storage account, then compares only the parsed `AccountKey`. It finishes and
+releases one site's response before requesting the next site. The shared
+grammar and mutation rules are defined in
+[Storage connection-string research](storage-connection-string-bindings.md).
 
 Inspection must:
 
@@ -195,10 +201,11 @@ the plan can remain executable with the existing confirmation warning.
 
 ### Deliberately excluded shapes
 
-The first contract compares whole application-setting values only. It does not
-parse or rewrite:
+The provider compares exact raw keys and parses only the reviewed Azure
+Storage Shared Key connection-string grammar. It does not parse or rewrite:
 
-- an Azure Storage connection string containing `AccountKey=...`;
+- malformed, SAS, `UseDevelopmentStorage=true`, identity-based, or otherwise
+  unsupported Storage connection strings;
 - JSON or another structured value containing a key;
 - App Service's separate connection-string collection;
 - a Key Vault reference such as `@Microsoft.KeyVault(...)`;
@@ -207,10 +214,9 @@ parse or rewrite:
 - configuration in a process, container image, repository, pipeline, or
   external secret store.
 
-These exclusions must be named in the plan's binding-coverage message. A later
-Storage connection-string contract is possible, but it requires one documented
-grammar and a separate exact update and redaction review. It must not be added
-as permissive substring replacement.
+These exclusions must be named in the plan's binding-coverage message. Another
+structured value requires its own documented grammar and exact update and
+redaction review. It must not be added as permissive substring replacement.
 
 ### Secret-free credential binding
 
@@ -240,7 +246,7 @@ The executor derives the expected slot from the binding's original slot plus
 preceding update steps. Raw values remain inside nested key-provider callbacks
 and are never persisted.
 
-The resulting transition is:
+For raw values, the resulting transition is:
 
 1. read the current binding value;
 2. compare it with the expected current key;
@@ -252,6 +258,10 @@ The resulting transition is:
 This expected-to-replacement contract applies to every managed binding. It
 protects Foundry and dotenv updates as well as App Service. It is not an App
 Service-specific fallback or retry loop.
+
+For a reviewed Storage connection string, the same states apply to its parsed
+`AccountKey`. The account name and resource type must still match, and an
+update replaces only the exact key span while preserving all other fields.
 
 Pending-operation reconciliation then remains deterministic:
 
@@ -371,7 +381,9 @@ Automated tests use fake SDK clients and have no live subscription dependency.
 
 - raw Storage and Cognitive key values map to the correct slots;
 - aliases are grouped without duplicate update steps;
-- unrelated values, Key Vault references, embedded connection strings, and
+- reviewed Storage Shared Key connection strings match only their named account
+  and preserve all fields except `AccountKey` during updates;
+- unrelated values, Key Vault references, unsupported embedded values, and
   JSON do not match;
 - an ambiguous key value blocks;
 - sentinel secrets never appear in models, JSON, output, warnings, exceptions,
@@ -398,7 +410,7 @@ Automated tests use fake SDK clients and have no live subscription dependency.
 - saved plans and fresh validation preserve the exact enabled or skipped mode;
 - `--skip-azure-bindings` does not disable an explicit plaintext or SOPS dotenv
   binding;
-- restart, concurrency, workload, and exact-value coverage are clear in human
+- restart, concurrency, workload, and reviewed-value coverage are clear in human
   and JSON output;
 - `--yes` accepts warnings but not blocking states;
 - plan and operation artifact size limits still apply.
@@ -412,6 +424,8 @@ expressions:
 
 - one raw Storage `key1` setting;
 - one alias of that Storage key to test grouped replacement;
+- one documented Storage Shared Key connection string using that same key to
+  test representation-preserving grouped replacement;
 - one raw Azure OpenAI `Key1` setting;
 - one unrelated non-secret setting that must survive both full replacements.
 
@@ -439,7 +453,7 @@ approval immediately before each Azure mutation.
 - [x] Record default automatic Azure binding inspection and the global
       `--skip-azure-bindings` choice in reports and plans.
 - [x] Add default site enumeration.
-- [x] Inspect exact-value settings while ephemeral candidate HMACs are alive.
+- [x] Inspect reviewed setting values while ephemeral candidate HMACs are alive.
 - [x] Add App Service update, re-read verification, errors, and redaction.
 - [x] Persist and revalidate secret-free App Service bindings in plan version
       `1` through the existing binding models.
@@ -450,6 +464,9 @@ approval immediately before each Azure mutation.
 - [x] Extend the disposable fixture and fake-command harness tests.
 - [x] Exercise the F1 contract in separately approved live runs and confirm
       tagged teardown.
+- [x] Add the reviewed Storage Shared Key connection-string value shape and
+      extend the fixture plus non-live harness contract.
+- [x] Exercise the connection-string fixture in a separately approved live run.
 
 ## Sources
 

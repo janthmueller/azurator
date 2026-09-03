@@ -14,8 +14,7 @@ from typer.testing import CliRunner
 import azurator.cli as cli_module
 from azurator.auth import SubscriptionSelection
 from azurator.cli import app
-from azurator.exporting import DotenvExportAssignment
-from azurator.models import Inventory, KeyMap, KeyMapEntry
+from azurator.models import DotenvKeyAssignment, Inventory, KeyMap, KeyMapEntry
 from azurator.refreshing import SopsDotenvRefreshService
 from tests.cli_test_support import SUBSCRIPTION_ID, SUBSCRIPTION_NAME, make_inventory
 from tests.sops_test_support import FakeSopsCommand, write_fake_sops_file
@@ -28,12 +27,12 @@ class FakeExportService:
     def __init__(self, payload: str, error: Exception | None = None) -> None:
         self._payload = payload
         self._error = error
-        self.calls: list[tuple[str, tuple[DotenvExportAssignment, ...]]] = []
+        self.calls: list[tuple[str, tuple[DotenvKeyAssignment, ...]]] = []
 
     def render(
         self,
         subscription_id: str,
-        assignments: Sequence[DotenvExportAssignment],
+        assignments: Sequence[DotenvKeyAssignment],
     ) -> str:
         self.calls.append((subscription_id, tuple(assignments)))
         if self._error is not None:
@@ -45,6 +44,32 @@ def _write_key_map(path: Path, *, subscription_id: str = SUBSCRIPTION_ID) -> Key
     resource = make_inventory(subscription_id).resources[0]
     key_map = KeyMap(
         subscription_id=subscription_id,
+        mappings=(
+            KeyMapEntry(selector="PRIMARY_KEY", key_resource_id=resource.resource_id, key_slot="key1"),
+            KeyMapEntry(selector="PRIMARY_ALIAS", key_resource_id=resource.resource_id, key_slot="key1"),
+            KeyMapEntry(selector="SECONDARY_KEY", key_resource_id=resource.resource_id, key_slot="key2"),
+        ),
+    )
+    path.write_text(key_map.model_dump_json(indent=2) + "\n", encoding="utf-8")
+    return key_map
+
+
+def _inventory_with_storage_name(name: str) -> Inventory:
+    inventory = make_inventory()
+    resource = inventory.resources[0]
+    renamed = resource.model_copy(
+        update={
+            "name": name,
+            "resource_id": resource.resource_id.rsplit("/", 1)[0] + f"/{name}",
+        }
+    )
+    return inventory.model_copy(update={"resources": (renamed,)})
+
+
+def _write_inventory_key_map(path: Path, inventory: Inventory) -> KeyMap:
+    resource = inventory.resources[0]
+    key_map = KeyMap(
+        subscription_id=inventory.subscription_id,
         mappings=(
             KeyMapEntry(selector="PRIMARY_KEY", key_resource_id=resource.resource_id, key_slot="key1"),
             KeyMapEntry(selector="PRIMARY_ALIAS", key_resource_id=resource.resource_id, key_slot="key1"),
@@ -154,6 +179,74 @@ def test_refresh_updates_plaintext_values_and_preserves_unmapped_content(
     assert "1 mapped assignment was already current" in normalized
     assert _PRIMARY not in result.output
     assert _SECONDARY not in result.output
+
+
+def test_refresh_preserves_storage_connection_string_representation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    inventory = _inventory_with_storage_name("accountone")
+    key_map = tmp_path / "azurator.keys.json"
+    target = tmp_path / "secrets.env"
+    _write_inventory_key_map(key_map, inventory)
+    target.write_text(
+        "# keep\n"
+        "PRIMARY_KEY=DefaultEndpointsProtocol=https;AccountName=accountone;"
+        "AccountKey=stale-primary;EndpointSuffix=core.windows.net\n"
+        f"PRIMARY_ALIAS='{_PRIMARY}'\n"
+        "SECONDARY_KEY=\n",
+        encoding="utf-8",
+    )
+    service = FakeExportService(_current_payload())
+    _patch_azure_boundary(monkeypatch, service, inventory=inventory)
+
+    result = CliRunner().invoke(
+        app,
+        ["refresh", "--key-map", str(key_map), "--env-file", str(target), "--yes"],
+    )
+
+    assert result.exit_code == 0
+    assert target.read_text(encoding="utf-8") == (
+        "# keep\n"
+        "PRIMARY_KEY='DefaultEndpointsProtocol=https;AccountName=accountone;"
+        f"AccountKey={_PRIMARY};EndpointSuffix=core.windows.net'\n"
+        f"PRIMARY_ALIAS='{_PRIMARY}'\n"
+        f"SECONDARY_KEY='{_SECONDARY}'\n"
+    )
+    assert len(service.calls) == 1
+    assert _PRIMARY not in result.output
+    assert _SECONDARY not in result.output
+
+
+def test_refresh_rejects_connection_string_for_another_storage_account_before_key_retrieval(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    inventory = _inventory_with_storage_name("accountone")
+    key_map = tmp_path / "azurator.keys.json"
+    target = tmp_path / "secrets.env"
+    _write_inventory_key_map(key_map, inventory)
+    target.write_text(
+        "PRIMARY_KEY=DefaultEndpointsProtocol=https;AccountName=accounttwo;"
+        "AccountKey=stale-primary;EndpointSuffix=core.windows.net\n"
+        "PRIMARY_ALIAS=stale-primary\n"
+        "SECONDARY_KEY=stale-secondary\n",
+        encoding="utf-8",
+    )
+    original = target.read_bytes()
+    service = FakeExportService(_current_payload())
+    _patch_azure_boundary(monkeypatch, service, inventory=inventory)
+
+    result = CliRunner().invoke(
+        app,
+        ["refresh", "--key-map", str(key_map), "--env-file", str(target), "--yes"],
+    )
+
+    assert result.exit_code == 1
+    assert "targets a different Azure key resource" in result.output
+    assert service.calls == []
+    assert target.read_bytes() == original
+    assert "stale-primary" not in result.output
 
 
 def test_refresh_updates_sops_values_through_one_encrypted_transaction(

@@ -11,7 +11,6 @@ from rich.markup import escape
 from rich.table import Table
 
 from azurator.auth import SubscriptionSelection
-from azurator.exporting import DotenvExportAssignment
 from azurator.models import (
     BindingInspection,
     BindingInspectionStatus,
@@ -19,6 +18,7 @@ from azurator.models import (
     CandidateInspectionStatus,
     CredentialBinding,
     DiscoveryWarning,
+    DotenvKeyAssignment,
     Inventory,
     MatchReport,
     PlanSource,
@@ -322,7 +322,7 @@ def render_match_matrix(report: MatchReport, *, detail: OutputDetail = OutputDet
 
 
 def render_export_intent(
-    assignments: tuple[DotenvExportAssignment, ...],
+    assignments: tuple[DotenvKeyAssignment, ...],
     destination: Path,
     subscription: SubscriptionSelection,
     *,
@@ -377,7 +377,7 @@ def render_export_intent(
 
 
 def render_refresh_intent(
-    assignments: tuple[DotenvExportAssignment, ...],
+    assignments: tuple[DotenvKeyAssignment, ...],
     target: Path,
     subscription: SubscriptionSelection,
     *,
@@ -416,7 +416,7 @@ def render_refresh_intent(
         console.print("[dim]SOPS updates and verifies an encrypted temporary. No plaintext file is written.[/dim]")
 
 
-def _key_resource_intent_label(assignment: DotenvExportAssignment) -> str:
+def _key_resource_intent_label(assignment: DotenvKeyAssignment) -> str:
     """Render the concise ARM identity validated during assignment resolution."""
 
     return f"{assignment.resource_group} / {assignment.resource.name}"

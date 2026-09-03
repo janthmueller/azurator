@@ -6,7 +6,8 @@ description: Rotate Azure keys and replace their values in an existing dotenv fi
 import { Aside } from '@astrojs/starlight/components';
 
 Use this workflow when an existing dotenv file contains supported shared keys
-for Azure services.
+for Azure services. Storage keys may be raw values or supported Shared Key
+connection strings.
 
 <Aside type="caution" title="Plaintext at rest">
 Azurator does not encrypt the file. Use this workflow only when plaintext secret
@@ -48,6 +49,7 @@ Azurator calls the file assignments and those Azure entries
 ## Update behavior
 
 - Several variables containing the same key are updated together.
+- A supported Storage connection string keeps every field except `AccountKey`.
 - Unmatched assignments, comments, and line endings are preserved.
 - Atomic replacement preserves the POSIX mode, owner, and group.
 - A variable matching more than one Azure slot is rejected.

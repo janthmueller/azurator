@@ -26,8 +26,9 @@ with:
   containing Storage `key1`;
 - one project-level `AzureOpenAI`/`ApiKey` connection initially containing
   OpenAI `Key1`;
-- one empty Linux App Service app on an F1 plan with two Storage `key1`
-  setting aliases, one Azure OpenAI `Key1` setting, and one unrelated setting;
+- one empty Linux App Service app on an F1 plan with two raw Storage `key1`
+  setting aliases, one Storage Shared Key connection string, one Azure OpenAI
+  `Key1` setting, and one unrelated setting;
 - one built-in `Foundry User` role assignment for the deployment principal,
   scoped only to the disposable AI Services account.
 
@@ -169,8 +170,9 @@ Azurator commands. It:
     Storage `key2` onto its regenerated value;
 12. lets `azurator rotate --sops-file` generate, display, validate, and confirm
     that same plan once, then checks the encrypted aliases, unrelated and empty
-    assignments, both Foundry records, all three App Service key settings, and
-    the unrelated App Service setting; and
+    assignments, both Foundry records, all four App Service key settings
+    including the Storage connection string, and the unrelated App Service
+    setting; and
 13. delegates deletion to `live-test-down`, including its fresh confirmation.
 
 The workflow does not pass `--yes`, invoke a model, store blob data, or claim a

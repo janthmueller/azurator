@@ -56,6 +56,9 @@ closed before mutation; no aliases or alternate requests are attempted.
 
 The App Service contract and evidence are described in
 [App Service binding research](../research/app-service-bindings.md).
+The shared exact grammar for Storage Shared Key connection strings in App
+Service and local dotenv bindings is described in
+[Storage connection-string research](../research/storage-connection-string-bindings.md).
 
 ## Capability fields
 

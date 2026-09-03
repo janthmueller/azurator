@@ -8,6 +8,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import TextIO
 
+from azurator.credential_values import STORAGE_RESOURCE_TYPE, parse_storage_shared_key_connection_string
 from azurator.discovery import utc_now
 from azurator.fingerprints import EphemeralFingerprinter, erase_fingerprint
 from azurator.inputs import SecretInputError, consume_dotenv
@@ -70,6 +71,8 @@ def _new_session_key() -> bytes:
 class _InputFingerprint:
     selector: str
     digest: bytearray = field(repr=False)
+    resource_type: str | None = None
+    resource_name: str | None = None
 
     def erase(self) -> None:
         erase_fingerprint(self.digest)
@@ -81,10 +84,12 @@ class _MatchAccumulator:
         fingerprinter: EphemeralFingerprinter,
         inputs: Sequence[_InputFingerprint],
         allowed_slots: dict[str, frozenset[str]],
+        resources: dict[str, DiscoveredResource],
     ) -> None:
         self._fingerprinter = fingerprinter
         self._inputs = tuple(inputs)
         self._allowed_slots = allowed_slots
+        self._resources = resources
         self._consumed_slots: set[tuple[str, str]] = set()
         self._candidate_fingerprints: dict[tuple[str, str], bytearray] = {}
         self.matches: list[KeyMatch] = []
@@ -98,10 +103,18 @@ class _MatchAccumulator:
         identity = (resource_id, key_slot)
         if allowed is None or key_slot not in allowed or identity in self._consumed_slots or not value:
             raise MatchingError("a provider violated the supported candidate-consumption contract")
+        resource = self._resources.get(resource_id)
+        if resource is None:
+            raise MatchingError("a provider consumed a candidate without supported resource metadata")
 
         candidate = self._fingerprinter.derive(value)
         try:
             for input_fingerprint in self._inputs:
+                if input_fingerprint.resource_type is not None and (
+                    resource.resource_type.casefold() != input_fingerprint.resource_type.casefold()
+                    or resource.name.casefold() != (input_fingerprint.resource_name or "").casefold()
+                ):
+                    continue
                 if self._fingerprinter.equal(input_fingerprint.digest, candidate):
                     self.matches.append(
                         KeyMatch(
@@ -168,11 +181,32 @@ class MatchingService:
         inputs: list[_InputFingerprint] = []
         with EphemeralFingerprinter(self._key_factory()) as fingerprinter:
             try:
+
+                def consume_input(selector: str, value: str) -> None:
+                    parsed = parse_storage_shared_key_connection_string(value)
+                    candidate = value
+                    resource_type: str | None = None
+                    resource_name: str | None = None
+                    try:
+                        if parsed is not None:
+                            candidate = parsed.account_key
+                            resource_type = STORAGE_RESOURCE_TYPE
+                            resource_name = parsed.account_name
+                        inputs.append(
+                            _InputFingerprint(
+                                selector=selector,
+                                digest=fingerprinter.derive(candidate),
+                                resource_type=resource_type,
+                                resource_name=resource_name,
+                            )
+                        )
+                    finally:
+                        candidate = ""
+                        value = ""
+
                 input_summary = consume_dotenv(
                     stream,
-                    lambda selector, value: inputs.append(
-                        _InputFingerprint(selector=selector, digest=fingerprinter.derive(value))
-                    ),
+                    consume_input,
                 )
                 if not inputs:
                     raise SecretInputError("dotenv input contains no non-empty values")
@@ -276,7 +310,7 @@ class MatchingService:
         warnings = [warning for warning in inventory.warnings if not _is_untested_permission_warning(warning)]
 
         with EphemeralFingerprinter(self._key_factory()) as fingerprinter:
-            accumulator = _MatchAccumulator(fingerprinter, (), allowed_slots)
+            accumulator = _MatchAccumulator(fingerprinter, (), allowed_slots, selected_resources)
             try:
                 inspections: list[CandidateInspection] = []
                 declared_consumed_slots: set[tuple[str, str]] = set()
@@ -389,7 +423,7 @@ class MatchingService:
                     key_slots=resource.key_slots,
                 )
 
-        accumulator = _MatchAccumulator(fingerprinter, inputs, allowed_slots)
+        accumulator = _MatchAccumulator(fingerprinter, inputs, allowed_slots, discovered_by_id)
         try:
             inspections: list[CandidateInspection] = []
             declared_consumed_slots: set[tuple[str, str]] = set()

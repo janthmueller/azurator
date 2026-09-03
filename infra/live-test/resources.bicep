@@ -229,6 +229,10 @@ resource appService 'Microsoft.Web/sites@2024-11-01' = {
           value: storageAccount.listKeys().keys[0].value
         }
         {
+          name: 'AZURATOR_STORAGE_CONNECTION'
+          value: 'DefaultEndpointsProtocol=https;AccountName=${storageAccount.name};AccountKey=${storageAccount.listKeys().keys[0].value};EndpointSuffix=core.windows.net'
+        }
+        {
           name: 'AZURATOR_OPENAI_KEY'
           value: openAiAccount.listKeys().key1
         }

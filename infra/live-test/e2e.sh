@@ -391,6 +391,9 @@ load_fixture_resources() {
   )"; then
     fail "the fixture did not contain exactly one tagged rotation Storage Account"
   fi
+  STORAGE_ACCOUNT_NAME="${STORAGE_ACCOUNT_ID##*/}"
+  [[ "$STORAGE_ACCOUNT_NAME" =~ ^[a-z0-9]{3,24}$ ]] \
+    || fail "the tagged rotation Storage Account had an invalid name"
   if ! DISABLED_STORAGE_ACCOUNT_ID="$(
     select_fixture_resource_id \
       "$resources_json" "$STORAGE_RESOURCE_TYPE" "" "$DISABLED_STORAGE_ROLE" 2>/dev/null
@@ -749,7 +752,7 @@ validate_sops_match_report() {
           | select(.scope_id | same_id($app_service_id))
           | select(.key_resource_id | same_id($storage_id))
           | select(.key_slot == "key1")
-          | select(.selectors == ["AZURATOR_STORAGE_ALIAS", "AZURATOR_STORAGE_KEY"])
+          | select(.selectors == ["AZURATOR_STORAGE_ALIAS", "AZURATOR_STORAGE_CONNECTION", "AZURATOR_STORAGE_KEY"])
         ]
         | length == 1
       )
@@ -1148,6 +1151,21 @@ verify_unrelated_app_setting() {
     || fail "the unrelated App Service setting did not survive full-dictionary rotation updates"
 }
 
+verify_storage_connection_string_shape() {
+  local count
+  count="$(
+    "$AZ_BIN" webapp config appsettings list \
+      --name "$APP_SERVICE_NAME" \
+      --resource-group "$RESOURCE_GROUP_NAME" \
+      --subscription "$SUBSCRIPTION_ID" \
+      --query "[?name=='AZURATOR_STORAGE_CONNECTION' && starts_with(value, 'DefaultEndpointsProtocol=https;AccountName=$STORAGE_ACCOUNT_NAME;AccountKey=') && ends_with(value, ';EndpointSuffix=core.windows.net')] | length(@)" \
+      --output tsv \
+      --only-show-errors
+  )"
+  [[ "$count" == "1" ]] \
+    || fail "the App Service Storage connection string did not preserve its reviewed shape"
+}
+
 main() {
   local exists before_file_state after_file_state discovery_report_json match_report_json
   local age_identity age_recipient key_map managed_sops mapped_sops openai_selector plan_report_json
@@ -1422,6 +1440,7 @@ main() {
   validate_sops_document \
     "$managed_sops" "$storage_selector" "$storage_secondary_selector" "$openai_selector"
   verify_unrelated_app_setting
+  verify_storage_connection_string_shape
   [[ ! -L "$managed_sops" && "$(stat -c '%a' "$managed_sops")" == "600" ]] \
     || fail "the rotated managed SOPS file no longer satisfied the private mode-0600 contract"
 
@@ -1429,7 +1448,7 @@ main() {
   printf '%s\n' \
     'Verified both final Storage slots and Azure OpenAI Key1 across six SOPS assignments,' \
     'both Foundry connections,' \
-    'all three App Service key settings, and both unrelated local and Azure settings.' \
+    'all four App Service key settings, and both unrelated local and Azure settings.' \
     'No workload was invoked; this verifies stored configuration only.'
   remove_workspace
 

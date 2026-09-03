@@ -164,6 +164,28 @@ def validate_dotenv_assignments(content: str, selectors: tuple[str, ...]) -> Non
         raise SecretInputError(f"managed dotenv selector {sorted(missing)[0]!r} is missing")
 
 
+def dotenv_selected_values(content: str, selectors: tuple[str, ...]) -> dict[str, str | None]:
+    """Return only explicitly selected values from one validated dotenv document."""
+
+    selected = _validate_selected_selectors(selectors)
+    values: dict[str, str | None] = {}
+    try:
+        result = consume_dotenv(
+            StringIO(content, newline=""),
+            lambda selector, value: values.__setitem__(selector, value) if selector in selected else None,
+        )
+        for selector in result.skipped_empty_selectors:
+            if selector in selected:
+                values[selector] = None
+        missing = selected - set(values)
+        if missing:
+            raise SecretInputError(f"managed dotenv selector {sorted(missing)[0]!r} is missing")
+        return values
+    except BaseException:
+        values.clear()
+        raise
+
+
 def dotenv_values_equal(content: str, selectors: tuple[str, ...], expected: str) -> bool:
     """Compare exact dotenv assignments with one expected value without retaining their values."""
 

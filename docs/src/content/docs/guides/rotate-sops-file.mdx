@@ -4,7 +4,8 @@ description: Rotate Azure keys stored in a SOPS-encrypted dotenv file.
 ---
 
 Use this workflow when a SOPS-encrypted dotenv file contains supported
-shared-key credentials for Azure services.
+shared-key credentials for Azure services. Storage keys may be raw values or
+supported Shared Key connection strings.
 
 ## Requirements
 
@@ -27,7 +28,7 @@ azurator plan --sops-file secrets.enc.env
 azurator rotate --sops-file secrets.enc.env
 ```
 
-`match` reports exact top-level assignment matches. `plan` shows the complete
+`match` reports supported top-level assignment matches. `plan` shows the complete
 update sequence. `rotate` displays the same plan, asks for confirmation, and
 executes it.
 
@@ -37,6 +38,7 @@ Azurator decrypts content only in memory and sends replacement values to SOPS
 through standard input. It updates an encrypted temporary file, verifies
 selected and unrelated assignments, then atomically replaces the unchanged
 source. Azurator never writes decrypted SOPS content to disk.
+Supported Storage connection strings retain every field except `AccountKey`.
 
 When possible, assignments move to the sibling key before a selected slot is
 regenerated. They then move to the new value and are verified. Both slots of one

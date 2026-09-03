@@ -56,6 +56,24 @@ def _resource(name: str) -> DiscoveredResource:
     )
 
 
+def _storage_resource(name: str) -> DiscoveredResource:
+    return DiscoveredResource(
+        resource_id=(
+            f"/subscriptions/{SUBSCRIPTION_ID}/resourceGroups/rg/providers/Microsoft.Storage/storageAccounts/{name}"
+        ),
+        name=name,
+        resource_type="Microsoft.Storage/storageAccounts",
+        location="westeurope",
+        kind="StorageV2",
+        provider="storage-provider",
+        key_authentication=KeyAuthentication.enabled,
+        key_slots=(
+            KeySlot(name="key1", values_retrievable=True, rotatable=True),
+            KeySlot(name="key2", values_retrievable=True, rotatable=True),
+        ),
+    )
+
+
 class FakeMatchingProvider:
     def __init__(self) -> None:
         self.first = _resource("first")
@@ -120,6 +138,44 @@ class FakeMatchingProvider:
         return ProviderCandidateResult(inspections=tuple(inspections))
 
 
+class StorageMatchingProvider:
+    def __init__(self) -> None:
+        self.first = _storage_resource("storageone")
+        self.second = _storage_resource("storagetwo")
+
+    @property
+    def info(self) -> ProviderInfo:
+        return ProviderInfo(
+            name="storage-provider",
+            contract_version="1",
+            resource_types=("Microsoft.Storage/storageAccounts",),
+        )
+
+    def discover(self, subscription_id: str) -> ProviderDiscovery:
+        assert subscription_id == SUBSCRIPTION_ID
+        return ProviderDiscovery(resources=(self.first, self.second))
+
+    def inspect_candidates(
+        self,
+        subscription_id: str,
+        resources: Sequence[DiscoveredResource],
+        consume: CandidateSink,
+    ) -> ProviderCandidateResult:
+        assert subscription_id == SUBSCRIPTION_ID
+        inspections: list[CandidateInspection] = []
+        for resource in resources:
+            consume(resource.resource_id, "key1", "shared-storage-key==")
+            consume(resource.resource_id, "key2", f"{resource.name}-second-key==")
+            inspections.append(
+                CandidateInspection(
+                    resource_id=resource.resource_id,
+                    status=CandidateInspectionStatus.compared,
+                    key_slots=("key1", "key2"),
+                )
+            )
+        return ProviderCandidateResult(inspections=tuple(inspections))
+
+
 def test_matching_reports_selectors_resources_and_slots_without_values() -> None:
     provider = FakeMatchingProvider()
     service = MatchingService((provider,), clock=lambda: NOW, key_factory=lambda: b"k" * 32)
@@ -151,6 +207,36 @@ def test_matching_reports_selectors_resources_and_slots_without_values() -> None
     for raw_value in ("alpha-secret", "beta-secret", "unmatched-secret"):
         assert raw_value not in serialized
     assert "session-match" not in serialized
+
+
+def test_matching_identifies_the_account_key_inside_a_storage_connection_string() -> None:
+    provider = StorageMatchingProvider()
+    service = MatchingService((provider,), clock=lambda: NOW, key_factory=lambda: b"k" * 32)
+    connection_string = (
+        "DefaultEndpointsProtocol=https;AccountName=storageone;"
+        "AccountKey=shared-storage-key==;EndpointSuffix=core.windows.net"
+    )
+
+    report = service.match_dotenv(SUBSCRIPTION_ID, StringIO(f"STORAGE_CONNECTION='{connection_string}'\n"))
+
+    assert [(match.input_selector, match.resource_id, match.key_slot) for match in report.matches] == [
+        ("STORAGE_CONNECTION", provider.first.resource_id, "key1")
+    ]
+    assert connection_string not in report.model_dump_json()
+    assert "shared-storage-key" not in report.model_dump_json()
+
+
+def test_connection_string_account_name_prevents_cross_resource_key_matches() -> None:
+    provider = StorageMatchingProvider()
+    service = MatchingService((provider,), clock=lambda: NOW, key_factory=lambda: b"k" * 32)
+    connection_string = (
+        "DefaultEndpointsProtocol=https;AccountName=storageone;"
+        "AccountKey=shared-storage-key==;EndpointSuffix=core.windows.net"
+    )
+
+    report = service.match_dotenv(SUBSCRIPTION_ID, StringIO(f"STORAGE_CONNECTION='{connection_string}'\n"))
+
+    assert {match.resource_id for match in report.matches} == {provider.first.resource_id}
 
 
 def test_matching_rejects_empty_input_before_calling_a_provider() -> None:

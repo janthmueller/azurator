@@ -8,6 +8,11 @@ from collections.abc import Sequence
 from io import StringIO
 from pathlib import Path
 
+from azurator.credential_values import (
+    CredentialValueState,
+    credential_values_match,
+    transition_credential_values,
+)
 from azurator.files import (
     MAX_OPERATION_ARTIFACT_BYTES,
     UnsafeInputPathError,
@@ -20,7 +25,7 @@ from azurator.fingerprints import EphemeralFingerprinter, erase_fingerprint
 from azurator.inputs import (
     SecretInputError,
     consume_dotenv,
-    dotenv_values_equal,
+    dotenv_selected_values,
     validate_dotenv_assignments,
 )
 from azurator.models import (
@@ -142,7 +147,7 @@ def attach_sops_dotenv_file_bindings(report: MatchReport, path: Path) -> MatchRe
 
 
 class SopsDotenvFileProvider:
-    """Update and verify exact assignments without writing decrypted SOPS content to disk."""
+    """Update and verify reviewed assignments without writing decrypted SOPS content to disk."""
 
     def __init__(self, command: SopsCommand | None = None) -> None:
         self._command = command or SopsCli()
@@ -208,13 +213,24 @@ class SopsDotenvFileProvider:
         after = ""
         before_fingerprints: dict[str, bytearray | None] = {}
         after_fingerprints: dict[str, bytearray | None] = {}
+        selected_values: dict[str, str | None] = {}
+        replacements: dict[str, str] = {}
         try:
             with temporary_regular_copy(path, max_bytes=_MAX_SOPS_FILE_BYTES) as (temporary, snapshot):
                 before = self._command.decrypt_dotenv(temporary)
                 validate_dotenv_assignments(before, binding.selectors)
-                if dotenv_values_equal(before, binding.selectors, replacement_key):
+                selected_values = dotenv_selected_values(before, binding.selectors)
+                state, replacements = transition_credential_values(
+                    selected_values,
+                    binding.selectors,
+                    resource_type=resource.resource_type,
+                    resource_name=resource.name,
+                    expected_key=expected_key,
+                    replacement_key=replacement_key,
+                )
+                if state is CredentialValueState.replacement:
                     return
-                if not dotenv_values_equal(before, binding.selectors, expected_key):
+                if state is CredentialValueState.drift:
                     raise ProviderOperationError(
                         "sops-file-binding-drift-detected",
                         "The managed SOPS dotenv assignments changed after planning; they were not updated.",
@@ -224,10 +240,18 @@ class SopsDotenvFileProvider:
                     before_fingerprints = _dotenv_fingerprints(before, fingerprinter)
                     before = ""
                     for selector in binding.selectors:
-                        self._command.set_dotenv_value(temporary, selector, replacement_key)
+                        self._command.set_dotenv_value(temporary, selector, replacements[selector])
                     after = self._command.decrypt_dotenv(temporary)
                     validate_dotenv_assignments(after, binding.selectors)
-                    if not dotenv_values_equal(after, binding.selectors, replacement_key):
+                    selected_values.clear()
+                    selected_values = dotenv_selected_values(after, binding.selectors)
+                    if not credential_values_match(
+                        selected_values,
+                        binding.selectors,
+                        resource_type=resource.resource_type,
+                        resource_name=resource.name,
+                        expected_key=replacement_key,
+                    ):
                         raise ProviderOperationError(
                             "sops-file-update-verification-failed",
                             "The encrypted dotenv temporary did not retain the requested replacement.",
@@ -263,6 +287,8 @@ class SopsDotenvFileProvider:
             after = ""
             _erase_dotenv_fingerprints(before_fingerprints)
             _erase_dotenv_fingerprints(after_fingerprints)
+            selected_values.clear()
+            replacements.clear()
             expected_key = ""
             replacement_key = ""
 
@@ -282,9 +308,17 @@ class SopsDotenvFileProvider:
                 "A SOPS dotenv binding did not match the expected verification shape.",
             )
         content = ""
+        values: dict[str, str | None] = {}
         try:
             content = self.read_source(path)
-            matches = dotenv_values_equal(content, binding.selectors, expected_key)
+            values = dotenv_selected_values(content, binding.selectors)
+            matches = credential_values_match(
+                values,
+                binding.selectors,
+                resource_type=resource.resource_type,
+                resource_name=resource.name,
+                expected_key=expected_key,
+            )
         except SecretInputError:
             raise ProviderOperationError(
                 "sops-file-verification-contract-invalid",
@@ -297,6 +331,7 @@ class SopsDotenvFileProvider:
             ) from None
         finally:
             content = ""
+            values.clear()
             expected_key = ""
         if not matches:
             raise ProviderOperationError(
@@ -312,8 +347,8 @@ class SopsDotenvFileProvider:
     ) -> Path:
         path = Path(binding.scope_id)
         valid_resource = (
-            resource.key_authentication is KeyAuthentication.enabled
-            and resource.resource_type in _KEY_RESOURCE_TYPES
+            _is_supported_key_resource(resource)
+            and resource.key_authentication is KeyAuthentication.enabled
             and binding.key_resource_id.casefold() == resource.resource_id.casefold()
             and binding.key_slot in {slot.name for slot in resource.key_slots}
         )
@@ -347,6 +382,15 @@ class SopsDotenvFileProvider:
                 "A SOPS dotenv operation did not match the expected binding shape.",
             ) from None
         return path
+
+
+def _is_supported_key_resource(resource: DiscoveredResource) -> bool:
+    return (
+        resource.provider == "azure-storage" and resource.resource_type.casefold() == _STORAGE_RESOURCE_TYPE.casefold()
+    ) or (
+        resource.provider == "azure-cognitive-services"
+        and resource.resource_type.casefold() == _COGNITIVE_RESOURCE_TYPE.casefold()
+    )
 
 
 def _binding(

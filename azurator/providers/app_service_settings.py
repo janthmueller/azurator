@@ -1,18 +1,23 @@
-"""Exact-value App Service application-settings credential bindings."""
+"""Reviewed App Service application-settings credential bindings."""
 
 from __future__ import annotations
 
 import hashlib
 import json
 from collections.abc import Sequence
-from enum import Enum
 from typing import cast
 
 from azure.core.exceptions import HttpResponseError, ServiceRequestError, ServiceResponseError
 from azure.mgmt.web.models import StringDictionary
 
 from azurator.clients import AppSettingsLike, AzureClientFactory, WebAppLike, WebAppOperations
-from azurator.fingerprints import secret_values_equal
+from azurator.credential_values import (
+    STORAGE_RESOURCE_TYPE,
+    CredentialValueState,
+    credential_values_match,
+    parse_storage_shared_key_connection_string,
+    transition_credential_values,
+)
 from azurator.models import (
     BindingInspection,
     BindingInspectionStatus,
@@ -38,7 +43,7 @@ _PROVIDER_NAME = "azure-app-service-settings"
 _PROVIDER_CONTRACT_VERSION = "1"
 _BINDING_RESOURCE_TYPE = "Microsoft.Web/sites/config/appsettings"
 _SITE_RESOURCE_TYPE = "Microsoft.Web/sites"
-_STORAGE_RESOURCE_TYPE = "Microsoft.Storage/storageAccounts"
+_STORAGE_RESOURCE_TYPE = STORAGE_RESOURCE_TYPE
 _COGNITIVE_RESOURCE_TYPE = "Microsoft.CognitiveServices/accounts"
 _KEY_RESOURCE_TYPES = (_STORAGE_RESOURCE_TYPE, _COGNITIVE_RESOURCE_TYPE)
 
@@ -49,13 +54,8 @@ APP_SERVICE_SETTINGS_PROVIDER_INFO = ProviderInfo(
 )
 
 
-class _TransitionState(str, Enum):
-    expected = "expected"
-    replacement = "replacement"
-
-
 class AppServiceSettingsProvider:
-    """Inspect and manage whole-value key copies in top-level App Service apps."""
+    """Inspect and manage reviewed key values in top-level App Service apps."""
 
     def __init__(self, clients: AzureClientFactory) -> None:
         self._clients = clients
@@ -84,7 +84,7 @@ class AppServiceSettingsProvider:
         key_resources = {
             resource.resource_id: resource
             for resource in resources
-            if resource.resource_type in _KEY_RESOURCE_TYPES and resource.resource_id in selected_resource_ids
+            if _is_supported_key_resource(resource) and resource.resource_id in selected_resource_ids
         }
         if not key_resources:
             return ProviderBindingResult()
@@ -163,10 +163,7 @@ class AppServiceSettingsProvider:
                             try:
                                 if not raw_value:
                                     continue
-                                for resource_id in sorted(key_resources, key=str.casefold):
-                                    key_slot = identify(resource_id, raw_value)
-                                    if key_slot is not None:
-                                        matches.append((resource_id, key_slot))
+                                matches = _identify_setting_value(raw_value, key_resources, identify)
                             finally:
                                 raw_value = ""
                             if len(matches) > 1:
@@ -261,6 +258,7 @@ class AppServiceSettingsProvider:
         client = self._clients.web_site_management(subscription_id)
         settings: dict[str, str] | None = None
         replacement_settings: dict[str, str] | None = None
+        replacements: dict[str, str] | None = None
         request: StringDictionary | None = None
         try:
             response = self._read_settings(client.web_apps, coordinates)
@@ -270,12 +268,17 @@ class AppServiceSettingsProvider:
                     "app-service-settings-update-contract-invalid",
                     "App Service returned settings outside the supported update contract.",
                 )
-            state = _transition_state(settings, binding.selectors, expected_key, replacement_key)
-            if state is _TransitionState.replacement:
+            replacements = _transition_replacements(
+                settings,
+                binding.selectors,
+                resource,
+                expected_key,
+                replacement_key,
+            )
+            if replacements is None:
                 return
             replacement_settings = dict(settings)
-            for selector in binding.selectors:
-                replacement_settings[selector] = replacement_key
+            replacement_settings.update(replacements)
             request = StringDictionary(properties=replacement_settings)
             try:
                 client.web_apps.update_application_settings(
@@ -295,6 +298,8 @@ class AppServiceSettingsProvider:
                 settings.clear()
             if replacement_settings is not None:
                 replacement_settings.clear()
+            if replacements is not None:
+                replacements.clear()
             if request is not None:
                 request.properties = None
             expected_key = ""
@@ -326,7 +331,7 @@ class AppServiceSettingsProvider:
                     "app-service-settings-verification-contract-invalid",
                     "App Service returned settings outside the supported verification contract.",
                 )
-            if not _selectors_equal(settings, binding.selectors, expected_key):
+            if not _selectors_equal(settings, binding.selectors, resource, expected_key):
                 raise ProviderOperationError(
                     BINDING_VERIFICATION_MISMATCH_CODE,
                     "The App Service settings did not retain the expected Azure key.",
@@ -359,8 +364,7 @@ class AppServiceSettingsProvider:
         resource: DiscoveredResource,
     ) -> ResourceCoordinates:
         valid_resource = (
-            resource.provider in {"azure-storage", "azure-cognitive-services"}
-            and resource.resource_type in _KEY_RESOURCE_TYPES
+            _is_supported_key_resource(resource)
             and resource.key_authentication is KeyAuthentication.enabled
             and binding.key_resource_id.casefold() == resource.resource_id.casefold()
             and binding.key_slot in {slot.name for slot in resource.key_slots}
@@ -437,24 +441,83 @@ def _settings_dictionary(response: AppSettingsLike) -> dict[str, str] | None:
     return cast(dict[str, str], raw_properties)
 
 
-def _transition_state(
+def _is_supported_key_resource(resource: DiscoveredResource) -> bool:
+    return (
+        resource.provider == "azure-storage" and resource.resource_type.casefold() == _STORAGE_RESOURCE_TYPE.casefold()
+    ) or (
+        resource.provider == "azure-cognitive-services"
+        and resource.resource_type.casefold() == _COGNITIVE_RESOURCE_TYPE.casefold()
+    )
+
+
+def _transition_replacements(
     settings: dict[str, str],
     selectors: tuple[str, ...],
+    resource: DiscoveredResource,
     expected_key: str,
     replacement_key: str,
-) -> _TransitionState:
-    if _selectors_equal(settings, selectors, replacement_key):
-        return _TransitionState.replacement
-    if _selectors_equal(settings, selectors, expected_key):
-        return _TransitionState.expected
+) -> dict[str, str] | None:
+    state, replacements = transition_credential_values(
+        settings,
+        selectors,
+        resource_type=resource.resource_type,
+        resource_name=resource.name,
+        expected_key=expected_key,
+        replacement_key=replacement_key,
+    )
+    if state is CredentialValueState.replacement:
+        replacements.clear()
+        return None
+    if state is CredentialValueState.expected:
+        return replacements
+    replacements.clear()
     raise ProviderOperationError(
         "app-service-settings-binding-drift-detected",
         "The App Service settings changed after planning; they were not updated.",
     )
 
 
-def _selectors_equal(settings: dict[str, str], selectors: tuple[str, ...], expected_key: str) -> bool:
-    return all(selector in settings and secret_values_equal(settings[selector], expected_key) for selector in selectors)
+def _selectors_equal(
+    settings: dict[str, str],
+    selectors: tuple[str, ...],
+    resource: DiscoveredResource,
+    expected_key: str,
+) -> bool:
+    return credential_values_match(
+        settings,
+        selectors,
+        resource_type=resource.resource_type,
+        resource_name=resource.name,
+        expected_key=expected_key,
+    )
+
+
+def _identify_setting_value(
+    value: str,
+    key_resources: dict[str, DiscoveredResource],
+    identify: CandidateIdentifier,
+) -> list[tuple[str, str]]:
+    parsed = parse_storage_shared_key_connection_string(value)
+    matches: list[tuple[str, str]] = []
+    if parsed is not None:
+        resource_ids = tuple(
+            resource_id
+            for resource_id, resource in key_resources.items()
+            if resource.resource_type.casefold() == _STORAGE_RESOURCE_TYPE.casefold()
+            and resource.name.casefold() == parsed.account_name.casefold()
+        )
+        candidate = parsed.account_key
+    else:
+        resource_ids = tuple(key_resources)
+        candidate = value
+    try:
+        for resource_id in sorted(resource_ids, key=str.casefold):
+            key_slot = identify(resource_id, candidate)
+            if key_slot is not None:
+                matches.append((resource_id, key_slot))
+        return matches
+    finally:
+        candidate = ""
 
 
 def _binding(
@@ -493,9 +556,10 @@ def _coverage_warning() -> DiscoveryWarning:
     return _warning(
         "app-service-settings-binding-coverage-limited",
         (
-            "App Service binding scope: exact whole application-setting values on visible top-level apps in the "
-            "selected subscription. Deployment slots, connection strings, embedded keys, Key Vault references, "
-            "and running workloads were not inspected."
+            "App Service binding scope: exact raw keys and documented Azure Storage Shared Key connection strings "
+            "in application settings on visible top-level apps in the selected subscription. Deployment slots, "
+            "the separate connection-string collection, other embedded values, Key Vault references, and running "
+            "workloads were not inspected."
         ),
     )
 

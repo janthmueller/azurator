@@ -44,7 +44,6 @@ from azurator.composition import inspect_selection as _compose_inspect_selection
 from azurator.composition import match_dotenv as _compose_match_dotenv
 from azurator.execution import ExecutionError, ExecutionService
 from azurator.exporting import (
-    DotenvExportAssignment,
     DotenvExportService,
     ExportError,
     SopsDotenvExportService,
@@ -71,6 +70,7 @@ from azurator.key_map import KeyMapError, build_key_map, parse_key_map
 from azurator.matching import MatchingError
 from azurator.models import (
     DiscoveredResource,
+    DotenvKeyAssignment,
     Inventory,
     KeyAuthentication,
     KeyMap,
@@ -1121,7 +1121,7 @@ def export_keys(
     except HttpResponseError:
         _fail("Azure key-resource discovery for export failed")
 
-    assignments: tuple[DotenvExportAssignment, ...] | None = None
+    assignments: tuple[DotenvKeyAssignment, ...] | None = None
     selections: tuple[KeySlotSelection, ...] | None = None
     if loaded_key_map is not None:
         try:
@@ -1331,6 +1331,15 @@ def refresh_keys(
     except (HttpResponseError, ServiceRequestError, ServiceResponseError):
         _fail("Azure key-resource discovery for refresh failed")
 
+    try:
+        if sops_refresh is not None:
+            sops_refresh.validate_mappings(target, assignments)
+        else:
+            assert plaintext_refresh is not None
+            plaintext_refresh.validate_mappings(target, assignments)
+    except RefreshError as error:
+        _fail(str(error))
+
     detail = _output_detail(context)
     _render_refresh_intent(
         assignments,
@@ -1361,10 +1370,10 @@ def refresh_keys(
                 assignments,
             )
             if sops_refresh is not None:
-                result = sops_refresh.refresh(target, selectors, payload)
+                result = sops_refresh.refresh(target, assignments, payload)
             else:
                 assert plaintext_refresh is not None
-                result = plaintext_refresh.refresh(target, selectors, payload)
+                result = plaintext_refresh.refresh(target, assignments, payload)
     except (
         AuthConfigurationError,
         AuthenticationRequiredError,

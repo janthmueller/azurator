@@ -7,6 +7,11 @@ from dataclasses import dataclass
 from io import StringIO
 from pathlib import Path
 
+from azurator.credential_values import (
+    credential_value_matches,
+    credential_value_shape_matches_resource,
+    replace_credential_value,
+)
 from azurator.files import (
     MAX_OPERATION_ARTIFACT_BYTES,
     UnsafeInputPathError,
@@ -16,14 +21,16 @@ from azurator.files import (
     replace_managed_plaintext,
     temporary_regular_copy,
 )
-from azurator.fingerprints import EphemeralFingerprinter, erase_fingerprint, secret_values_equal
+from azurator.fingerprints import EphemeralFingerprinter, erase_fingerprint
 from azurator.inputs import (
     MAX_DOTENV_FILE_BYTES,
     SecretInputError,
     consume_dotenv,
+    dotenv_selected_values,
     replace_dotenv_assignments,
     validate_dotenv_selector,
 )
+from azurator.models import DotenvKeyAssignment
 from azurator.sops import SopsCommand, SopsError
 
 
@@ -54,7 +61,7 @@ class PlaintextDotenvRefreshService:
         values: dict[str, str | None] = {}
         try:
             content = read_managed_plaintext(path, max_bytes=MAX_DOTENV_FILE_BYTES)
-            values = _selected_values(content, selected)
+            values = dotenv_selected_values(content, selected)
         except RefreshError:
             raise
         except SecretInputError as error:
@@ -68,33 +75,34 @@ class PlaintextDotenvRefreshService:
     def refresh(
         self,
         path: Path,
-        selectors: Sequence[str],
+        assignments: Sequence[DotenvKeyAssignment],
         current_dotenv: str,
     ) -> DotenvRefreshResult:
         """Replace all and only mapped assignments if the source remains unchanged."""
 
-        selected = _validated_selectors(selectors)
+        selected, assignments_by_selector = _validated_assignments(assignments)
         desired: dict[str, str] = {}
         observed: dict[str, str | None] = {}
+        replacements: dict[str, str] = {}
         content = ""
         replacement = ""
         try:
             desired = _desired_values(current_dotenv, selected)
             content = read_managed_plaintext(path, max_bytes=MAX_DOTENV_FILE_BYTES)
-            observed = _selected_values(content, selected)
-            changed = _changed_selectors(selected, observed, desired)
-            if not changed:
+            observed = dotenv_selected_values(content, selected)
+            replacements = _refresh_replacements(observed, desired, assignments_by_selector)
+            if not replacements:
                 return DotenvRefreshResult(len(selected), 0)
 
             replacement = replace_dotenv_assignments(
                 content,
-                {selector: desired[selector] for selector in changed},
+                replacements,
             )
             if len(replacement.encode("utf-8")) > MAX_DOTENV_FILE_BYTES:
                 raise RefreshError("the refreshed dotenv file would exceed the supported 1 MiB limit")
-            verified = _selected_values(replacement, selected)
+            verified = dotenv_selected_values(replacement, selected)
             try:
-                if _changed_selectors(selected, verified, desired):
+                if not _mapped_values_current(verified, desired, assignments_by_selector):
                     raise RefreshError("the refreshed dotenv document did not retain every requested value")
             finally:
                 verified.clear()
@@ -105,7 +113,7 @@ class PlaintextDotenvRefreshService:
                 replacement,
                 max_bytes=MAX_DOTENV_FILE_BYTES,
             )
-            return DotenvRefreshResult(len(selected), len(changed))
+            return DotenvRefreshResult(len(selected), len(replacements))
         except RefreshError:
             raise
         except SecretInputError as error:
@@ -118,6 +126,27 @@ class PlaintextDotenvRefreshService:
             replacement = ""
             desired.clear()
             observed.clear()
+            replacements.clear()
+
+    def validate_mappings(self, path: Path, assignments: Sequence[DotenvKeyAssignment]) -> None:
+        """Validate structured target values against mapped resources before key retrieval."""
+
+        selected, assignments_by_selector = _validated_assignments(assignments)
+        content = ""
+        values: dict[str, str | None] = {}
+        try:
+            content = read_managed_plaintext(path, max_bytes=MAX_DOTENV_FILE_BYTES)
+            values = dotenv_selected_values(content, selected)
+            _validate_existing_mappings(values, assignments_by_selector)
+        except RefreshError:
+            raise
+        except SecretInputError as error:
+            raise RefreshError(str(error)) from None
+        except (OSError, UnicodeError, UnsafeInputPathError):
+            raise RefreshError("the plaintext dotenv file changed before refresh") from None
+        finally:
+            content = ""
+            values.clear()
 
 
 class SopsDotenvRefreshService:
@@ -135,7 +164,7 @@ class SopsDotenvRefreshService:
         try:
             with temporary_regular_copy(path, max_bytes=MAX_OPERATION_ARTIFACT_BYTES) as (temporary, _snapshot):
                 content = self._command.decrypt_dotenv(temporary)
-                values = _selected_values(content, selected)
+                values = dotenv_selected_values(content, selected)
         except RefreshError:
             raise
         except SecretInputError as error:
@@ -149,16 +178,18 @@ class SopsDotenvRefreshService:
     def refresh(
         self,
         path: Path,
-        selectors: Sequence[str],
+        assignments: Sequence[DotenvKeyAssignment],
         current_dotenv: str,
     ) -> DotenvRefreshResult:
         """Update one encrypted temporary, verify it in memory, and commit once."""
 
-        selected = _validated_selectors(selectors)
+        selected, assignments_by_selector = _validated_assignments(assignments)
         desired: dict[str, str] = {}
-        desired_fingerprints: dict[str, bytearray | None] = {}
         before_fingerprints: dict[str, bytearray | None] = {}
         after_fingerprints: dict[str, bytearray | None] = {}
+        observed: dict[str, str | None] = {}
+        verified: dict[str, str | None] = {}
+        replacements: dict[str, str] = {}
         before = ""
         after = ""
         try:
@@ -166,38 +197,25 @@ class SopsDotenvRefreshService:
             with temporary_regular_copy(path, max_bytes=MAX_OPERATION_ARTIFACT_BYTES) as (temporary, snapshot):
                 before = self._command.decrypt_dotenv(temporary)
                 with EphemeralFingerprinter() as fingerprinter:
-                    desired_fingerprints = {selector: fingerprinter.derive(desired[selector]) for selector in selected}
                     before_fingerprints = _dotenv_fingerprints(before, fingerprinter)
                     _require_present_selectors(before_fingerprints, selected)
-                    changed = tuple(
-                        selector
-                        for selector in selected
-                        if not _fingerprints_equal(
-                            before_fingerprints[selector],
-                            desired_fingerprints[selector],
-                            fingerprinter,
-                        )
-                    )
+                    observed = dotenv_selected_values(before, selected)
+                    replacements = _refresh_replacements(observed, desired, assignments_by_selector)
                     before = ""
-                    if not changed:
+                    if not replacements:
                         return DotenvRefreshResult(len(selected), 0)
 
-                    for selector in changed:
-                        self._command.set_dotenv_value(temporary, selector, desired[selector])
+                    for selector in selected:
+                        if selector in replacements:
+                            self._command.set_dotenv_value(temporary, selector, replacements[selector])
 
                     after = self._command.decrypt_dotenv(temporary)
                     after_fingerprints = _dotenv_fingerprints(after, fingerprinter)
+                    verified = dotenv_selected_values(after, selected)
                     after = ""
                     if set(before_fingerprints) != set(after_fingerprints):
                         raise RefreshError("SOPS changed the dotenv assignment set; the source file was not replaced")
-                    if any(
-                        not _fingerprints_equal(
-                            after_fingerprints[selector],
-                            desired_fingerprints[selector],
-                            fingerprinter,
-                        )
-                        for selector in selected
-                    ):
+                    if not _mapped_values_current(verified, desired, assignments_by_selector):
                         raise RefreshError(
                             "SOPS did not retain every refreshed value; the source file was not replaced"
                         )
@@ -212,7 +230,7 @@ class SopsDotenvRefreshService:
                         raise RefreshError("SOPS changed an unmapped dotenv value; the source file was not replaced")
 
                 commit_regular_copy(snapshot, temporary, max_bytes=MAX_OPERATION_ARTIFACT_BYTES)
-                return DotenvRefreshResult(len(selected), len(changed))
+                return DotenvRefreshResult(len(selected), len(replacements))
         except RefreshError:
             raise
         except SecretInputError as error:
@@ -224,9 +242,32 @@ class SopsDotenvRefreshService:
             before = ""
             after = ""
             desired.clear()
-            _erase_dotenv_fingerprints(desired_fingerprints)
+            observed.clear()
+            verified.clear()
+            replacements.clear()
             _erase_dotenv_fingerprints(before_fingerprints)
             _erase_dotenv_fingerprints(after_fingerprints)
+
+    def validate_mappings(self, path: Path, assignments: Sequence[DotenvKeyAssignment]) -> None:
+        """Validate decrypted structured values against mapped resources before key retrieval."""
+
+        selected, assignments_by_selector = _validated_assignments(assignments)
+        content = ""
+        values: dict[str, str | None] = {}
+        try:
+            with temporary_regular_copy(path, max_bytes=MAX_OPERATION_ARTIFACT_BYTES) as (temporary, _snapshot):
+                content = self._command.decrypt_dotenv(temporary)
+                values = dotenv_selected_values(content, selected)
+                _validate_existing_mappings(values, assignments_by_selector)
+        except RefreshError:
+            raise
+        except SecretInputError as error:
+            raise RefreshError(str(error)) from None
+        except (SopsError, OSError, UnicodeError, UnsafeInputPathError, UnsafeOutputPathError):
+            raise RefreshError("the SOPS dotenv file changed before refresh") from None
+        finally:
+            content = ""
+            values.clear()
 
 
 def _validated_selectors(selectors: Sequence[str]) -> tuple[str, ...]:
@@ -239,6 +280,16 @@ def _validated_selectors(selectors: Sequence[str]) -> tuple[str, ...]:
     except SecretInputError:
         raise RefreshError("a refresh selector violates the supported dotenv contract") from None
     return selected
+
+
+def _validated_assignments(
+    assignments: Sequence[DotenvKeyAssignment],
+) -> tuple[tuple[str, ...], dict[str, DotenvKeyAssignment]]:
+    selected = _validated_selectors(tuple(assignment.selector for assignment in assignments))
+    assignments_by_selector = {assignment.selector: assignment for assignment in assignments}
+    if len(assignments_by_selector) != len(selected):
+        raise RefreshError("refresh requires one resource mapping for every unique dotenv selector")
+    return selected, assignments_by_selector
 
 
 def _desired_values(content: str, selectors: tuple[str, ...]) -> dict[str, str]:
@@ -257,43 +308,76 @@ def _desired_values(content: str, selectors: tuple[str, ...]) -> dict[str, str]:
     return values
 
 
-def _selected_values(content: str, selectors: tuple[str, ...]) -> dict[str, str | None]:
-    selected = set(selectors)
-    values: dict[str, str | None] = {}
-    try:
-        result = consume_dotenv(
-            StringIO(content, newline=""),
-            lambda selector, value: values.__setitem__(selector, value) if selector in selected else None,
-        )
-    except BaseException:
-        values.clear()
-        raise
-    for selector in result.skipped_empty_selectors:
-        if selector in selected:
-            values[selector] = None
-    try:
-        _require_present_selectors(values, selectors)
-        return values
-    except BaseException:
-        values.clear()
-        raise
-
-
 def _require_present_selectors(values: Mapping[str, object], selectors: tuple[str, ...]) -> None:
     missing = set(selectors) - set(values)
     if missing:
         raise RefreshError(f"mapped dotenv selector {sorted(missing)[0]!r} is missing from the target file")
 
 
-def _changed_selectors(
-    selectors: tuple[str, ...],
+def _refresh_replacements(
     observed: Mapping[str, str | None],
     desired: Mapping[str, str],
-) -> tuple[str, ...]:
-    return tuple(
-        selector
-        for selector in selectors
-        if observed[selector] is None or not secret_values_equal(observed[selector] or "", desired[selector])
+    assignments: Mapping[str, DotenvKeyAssignment],
+) -> dict[str, str]:
+    replacements: dict[str, str] = {}
+    try:
+        for selector, assignment in assignments.items():
+            value = observed[selector]
+            desired_key = desired[selector]
+            resource = assignment.resource
+            if value is not None and credential_value_matches(
+                value,
+                resource_type=resource.resource_type,
+                resource_name=resource.name,
+                expected_key=desired_key,
+            ):
+                continue
+            try:
+                replacements[selector] = replace_credential_value(
+                    value or "",
+                    resource_type=resource.resource_type,
+                    resource_name=resource.name,
+                    replacement_key=desired_key,
+                )
+            except ValueError:
+                raise RefreshError(
+                    "a mapped Storage connection string targets a different Azure key resource"
+                ) from None
+        return replacements
+    except BaseException:
+        replacements.clear()
+        raise
+
+
+def _validate_existing_mappings(
+    observed: Mapping[str, str | None],
+    assignments: Mapping[str, DotenvKeyAssignment],
+) -> None:
+    for selector, assignment in assignments.items():
+        value = observed[selector]
+        resource = assignment.resource
+        if value is not None and not credential_value_shape_matches_resource(
+            value,
+            resource_type=resource.resource_type,
+            resource_name=resource.name,
+        ):
+            raise RefreshError("a mapped Storage connection string targets a different Azure key resource")
+
+
+def _mapped_values_current(
+    observed: Mapping[str, str | None],
+    desired: Mapping[str, str],
+    assignments: Mapping[str, DotenvKeyAssignment],
+) -> bool:
+    return all(
+        observed[selector] is not None
+        and credential_value_matches(
+            observed[selector] or "",
+            resource_type=assignment.resource.resource_type,
+            resource_name=assignment.resource.name,
+            expected_key=desired[selector],
+        )
+        for selector, assignment in assignments.items()
     )
 
 

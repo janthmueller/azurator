@@ -5,7 +5,6 @@ from __future__ import annotations
 import re
 from collections import defaultdict
 from collections.abc import Sequence
-from dataclasses import dataclass
 from io import StringIO
 from pathlib import Path
 
@@ -17,7 +16,14 @@ from azurator.inputs import (
     render_dotenv_assignment,
     validate_dotenv_selector,
 )
-from azurator.models import DiscoveredResource, Inventory, KeyAuthentication, KeyMap, KeySlotSelection
+from azurator.models import (
+    DiscoveredResource,
+    DotenvKeyAssignment,
+    Inventory,
+    KeyAuthentication,
+    KeyMap,
+    KeySlotSelection,
+)
 from azurator.providers.base import KeyReadingProvider
 from azurator.providers.resource_ids import ResourceIdError, resource_coordinates
 from azurator.sops import MAX_SOPS_DOTENV_FILE_BYTES, SopsExportCommand
@@ -29,20 +35,10 @@ class ExportError(RuntimeError):
     """A secret-free export contract or rendering failure."""
 
 
-@dataclass(frozen=True, slots=True)
-class DotenvExportAssignment:
-    """One secret-free mapping from an Azure key slot to a dotenv selector."""
-
-    resource: DiscoveredResource
-    resource_group: str
-    key_slot: str
-    selector: str
-
-
 def build_dotenv_export_assignments(
     inventory: Inventory,
     selections: Sequence[KeySlotSelection],
-) -> tuple[DotenvExportAssignment, ...]:
+) -> tuple[DotenvKeyAssignment, ...]:
     """Validate exact inventory selections and assign deterministic dotenv names."""
 
     resources: dict[str, DiscoveredResource] = {}
@@ -51,7 +47,7 @@ def build_dotenv_export_assignments(
             raise ExportError("Azure discovery returned one resource identity more than once")
         resources[resource.resource_id] = resource
 
-    assignments: list[DotenvExportAssignment] = []
+    assignments: list[DotenvKeyAssignment] = []
     selected: set[tuple[str, str]] = set()
     used_selectors: set[str] = set()
     for selection in selections:
@@ -83,7 +79,7 @@ def build_dotenv_export_assignments(
             suffix += 1
         used_selectors.add(selector)
         assignments.append(
-            DotenvExportAssignment(
+            DotenvKeyAssignment(
                 resource=resource,
                 resource_group=_validated_resource_group(inventory.subscription_id, resource),
                 key_slot=selection.key_slot,
@@ -99,7 +95,7 @@ def build_dotenv_export_assignments(
 def build_key_map_export_assignments(
     inventory: Inventory,
     key_map: KeyMap,
-) -> tuple[DotenvExportAssignment, ...]:
+) -> tuple[DotenvKeyAssignment, ...]:
     """Resolve one key map against the current exportable inventory."""
 
     if inventory.subscription_id.casefold() != key_map.subscription_id.casefold():
@@ -112,7 +108,7 @@ def build_key_map_export_assignments(
             raise ExportError("Azure discovery returned one resource identity more than once")
         resources[identity] = resource
 
-    assignments: list[DotenvExportAssignment] = []
+    assignments: list[DotenvKeyAssignment] = []
     for mapping in key_map.mappings:
         resource = resources.get(mapping.key_resource_id.casefold())
         if resource is None:
@@ -133,7 +129,7 @@ def build_key_map_export_assignments(
         except SecretInputError:
             raise ExportError("a key-map selector violates the supported dotenv output contract") from None
         assignments.append(
-            DotenvExportAssignment(
+            DotenvKeyAssignment(
                 resource=resource,
                 resource_group=_validated_resource_group(inventory.subscription_id, resource),
                 key_slot=mapping.key_slot,
@@ -174,14 +170,14 @@ class DotenvExportService:
     def render(
         self,
         subscription_id: str,
-        assignments: Sequence[DotenvExportAssignment],
+        assignments: Sequence[DotenvKeyAssignment],
     ) -> str:
         """Return one canonical dotenv document while keeping values out of result metadata."""
 
         if not assignments:
             raise ExportError("select at least one Azure key slot to export")
 
-        grouped: dict[tuple[str, str], list[DotenvExportAssignment]] = defaultdict(list)
+        grouped: dict[tuple[str, str], list[DotenvKeyAssignment]] = defaultdict(list)
         seen_selectors: set[str] = set()
         for assignment in assignments:
             if assignment.selector in seen_selectors:
@@ -196,7 +192,7 @@ class DotenvExportService:
             grouped[(assignment.resource.provider, assignment.resource.resource_id)].append(assignment)
 
         validated_groups: list[
-            tuple[KeyReadingProvider, DiscoveredResource, dict[str, list[DotenvExportAssignment]], tuple[str, ...]]
+            tuple[KeyReadingProvider, DiscoveredResource, dict[str, list[DotenvKeyAssignment]], tuple[str, ...]]
         ] = []
         for (provider_name, _), resource_assignments in grouped.items():
             provider = self._providers[provider_name]
@@ -212,7 +208,7 @@ class DotenvExportService:
                 or any(not slot.values_retrievable for slot in resource.key_slots)
             ):
                 raise ExportError("an export resource violates the supported retrievable key-pair contract")
-            selected_by_slot: dict[str, list[DotenvExportAssignment]] = defaultdict(list)
+            selected_by_slot: dict[str, list[DotenvKeyAssignment]] = defaultdict(list)
             for assignment in resource_assignments:
                 selected_by_slot[assignment.key_slot].append(assignment)
             if not set(selected_by_slot).issubset(declared_slots):

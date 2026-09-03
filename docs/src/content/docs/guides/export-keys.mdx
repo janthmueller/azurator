@@ -107,6 +107,10 @@ refresh also preserves comments, ordering, and line endings. If a mapped
 selector is missing, the complete refresh stops without adding it or changing
 the file.
 
+Export writes raw key values. If a refresh target already contains a supported
+Storage Shared Key connection string for the mapped account, refresh preserves
+the string and replaces only `AccountKey`.
+
 SOPS refresh updates one encrypted temporary and verifies mapped and unmapped
 assignments before replacing the original once. It preserves the existing SOPS
 recipients while SOPS controls ciphertext formatting. Plaintext and SOPS

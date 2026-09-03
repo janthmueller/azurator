@@ -182,6 +182,38 @@ def test_dotenv_provider_atomically_updates_and_verifies_grouped_assignments(tmp
     path = _private_file(tmp_path)
     binding = attach_dotenv_file_bindings(_report(), path).bindings[-1]
     provider = DotenvFileProvider()
+    resource = _discovered_resource().model_copy(update={"resource_type": "microsoft.storage/STORAGEACCOUNTS"})
+
+    provider.update_binding(
+        SUBSCRIPTION_ID,
+        binding,
+        resource,
+        "old-azure-key",
+        "new-azure-key",
+    )
+    provider.verify_binding(SUBSCRIPTION_ID, binding, resource, "new-azure-key")
+
+    content = path.read_text(encoding="utf-8")
+    assert "PRIMARY_KEY='new-azure-key'" in content
+    assert "ALIAS_KEY='new-azure-key'" in content
+    assert "UNRELATED=leave-me" in content
+    if os.name != "nt":
+        assert path.stat().st_mode & 0o777 == 0o600
+    assert list(tmp_path.glob(".secrets.env.*")) == []
+
+
+def test_dotenv_provider_preserves_storage_connection_string_assignments(tmp_path: Path) -> None:
+    path = tmp_path / "secrets.env"
+    path.write_text(
+        "PRIMARY_KEY='DefaultEndpointsProtocol=https;AccountName=accountone;"
+        "AccountKey=old-azure-key;EndpointSuffix=core.windows.net'\n"
+        "ALIAS_KEY=old-azure-key\n"
+        "UNRELATED=leave-me\n",
+        encoding="utf-8",
+    )
+    path.chmod(0o600)
+    binding = attach_dotenv_file_bindings(_report(), path).bindings[-1]
+    provider = DotenvFileProvider()
 
     provider.update_binding(
         SUBSCRIPTION_ID,
@@ -192,13 +224,12 @@ def test_dotenv_provider_atomically_updates_and_verifies_grouped_assignments(tmp
     )
     provider.verify_binding(SUBSCRIPTION_ID, binding, _discovered_resource(), "new-azure-key")
 
-    content = path.read_text(encoding="utf-8")
-    assert "PRIMARY_KEY='new-azure-key'" in content
-    assert "ALIAS_KEY='new-azure-key'" in content
-    assert "UNRELATED=leave-me" in content
-    if os.name != "nt":
-        assert path.stat().st_mode & 0o777 == 0o600
-    assert list(tmp_path.glob(".secrets.env.*")) == []
+    assert path.read_text(encoding="utf-8") == (
+        "PRIMARY_KEY='DefaultEndpointsProtocol=https;AccountName=accountone;"
+        "AccountKey=new-azure-key;EndpointSuffix=core.windows.net'\n"
+        "ALIAS_KEY='new-azure-key'\n"
+        "UNRELATED=leave-me\n"
+    )
 
 
 def test_dotenv_provider_accepts_an_already_applied_transition_without_rewriting(tmp_path: Path) -> None:
@@ -393,3 +424,22 @@ def test_dotenv_provider_rejects_tampered_binding_before_reading(tmp_path: Path)
 
     assert caught.value.code == "dotenv-file-operation-contract-invalid"
     assert path.read_text(encoding="utf-8").count("old-azure-key") == 2
+
+
+def test_dotenv_provider_rejects_a_key_resource_with_mismatched_provider_identity(tmp_path: Path) -> None:
+    path = _private_file(tmp_path)
+    binding = attach_dotenv_file_bindings(_report(), path).bindings[-1]
+    resource = _discovered_resource().model_copy(update={"provider": "azure-cognitive-services"})
+    original = path.read_bytes()
+
+    with pytest.raises(ProviderOperationError) as caught:
+        DotenvFileProvider().update_binding(
+            SUBSCRIPTION_ID,
+            binding,
+            resource,
+            "old-azure-key",
+            "replacement-secret",
+        )
+
+    assert caught.value.code == "dotenv-file-operation-contract-invalid"
+    assert path.read_bytes() == original

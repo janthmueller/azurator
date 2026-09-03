@@ -7,10 +7,14 @@ import json
 from collections.abc import Sequence
 from pathlib import Path
 
+from azurator.credential_values import (
+    CredentialValueState,
+    credential_values_match,
+    transition_credential_values,
+)
 from azurator.files import (
     UnsafeInputPathError,
     UnsafeOutputPathError,
-    open_managed_plaintext,
     read_managed_plaintext,
     replace_managed_plaintext,
     resolve_parent_path,
@@ -18,9 +22,8 @@ from azurator.files import (
 from azurator.inputs import (
     MAX_DOTENV_FILE_BYTES,
     SecretInputError,
-    dotenv_stream_values_equal,
-    dotenv_values_equal,
-    replace_dotenv_values,
+    dotenv_selected_values,
+    replace_dotenv_assignments,
     validate_dotenv_assignments,
 )
 from azurator.models import (
@@ -143,7 +146,7 @@ def attach_dotenv_file_bindings(report: MatchReport, path: Path) -> MatchReport:
 
 
 class DotenvFileProvider:
-    """Update and verify exact assignments in one user-managed local dotenv file."""
+    """Update and verify reviewed assignments in one user-managed local dotenv file."""
 
     @property
     def info(self) -> ProviderInfo:
@@ -189,17 +192,28 @@ class DotenvFileProvider:
             )
         content = ""
         replacement = ""
+        values: dict[str, str | None] = {}
+        replacements: dict[str, str] = {}
         try:
             content = read_managed_plaintext(path, max_bytes=MAX_DOTENV_FILE_BYTES)
             validate_dotenv_assignments(content, binding.selectors)
-            if dotenv_values_equal(content, binding.selectors, replacement_key):
+            values = dotenv_selected_values(content, binding.selectors)
+            state, replacements = transition_credential_values(
+                values,
+                binding.selectors,
+                resource_type=resource.resource_type,
+                resource_name=resource.name,
+                expected_key=expected_key,
+                replacement_key=replacement_key,
+            )
+            if state is CredentialValueState.replacement:
                 return
-            if not dotenv_values_equal(content, binding.selectors, expected_key):
+            if state is CredentialValueState.drift:
                 raise ProviderOperationError(
                     "dotenv-file-binding-drift-detected",
                     "The managed dotenv assignments changed after planning; they were not updated.",
                 )
-            replacement = replace_dotenv_values(content, binding.selectors, replacement_key)
+            replacement = replace_dotenv_assignments(content, replacements)
             if len(replacement.encode("utf-8")) > MAX_DOTENV_FILE_BYTES:
                 raise SecretInputError("the updated dotenv file would exceed the supported size limit")
             replace_managed_plaintext(
@@ -221,6 +235,8 @@ class DotenvFileProvider:
         finally:
             content = ""
             replacement = ""
+            values.clear()
+            replacements.clear()
             expected_key = ""
             replacement_key = ""
 
@@ -239,9 +255,18 @@ class DotenvFileProvider:
                 "dotenv-file-verification-contract-invalid",
                 "A dotenv binding did not match the expected verification shape.",
             )
+        content = ""
+        values: dict[str, str | None] = {}
         try:
-            with open_managed_plaintext(path, max_bytes=MAX_DOTENV_FILE_BYTES) as stream:
-                matches = dotenv_stream_values_equal(stream, binding.selectors, expected_key)
+            content = read_managed_plaintext(path, max_bytes=MAX_DOTENV_FILE_BYTES)
+            values = dotenv_selected_values(content, binding.selectors)
+            matches = credential_values_match(
+                values,
+                binding.selectors,
+                resource_type=resource.resource_type,
+                resource_name=resource.name,
+                expected_key=expected_key,
+            )
         except SecretInputError:
             raise ProviderOperationError(
                 "dotenv-file-verification-contract-invalid",
@@ -253,6 +278,8 @@ class DotenvFileProvider:
                 "The managed dotenv file could not be re-read safely.",
             ) from None
         finally:
+            content = ""
+            values.clear()
             expected_key = ""
         if not matches:
             raise ProviderOperationError(
@@ -268,8 +295,8 @@ class DotenvFileProvider:
     ) -> Path:
         path = Path(binding.scope_id)
         valid_resource = (
-            resource.key_authentication is KeyAuthentication.enabled
-            and resource.resource_type in _KEY_RESOURCE_TYPES
+            _is_supported_key_resource(resource)
+            and resource.key_authentication is KeyAuthentication.enabled
             and binding.key_resource_id.casefold() == resource.resource_id.casefold()
             and binding.key_slot in {slot.name for slot in resource.key_slots}
         )
@@ -303,6 +330,15 @@ class DotenvFileProvider:
                 "A dotenv operation did not match the expected binding shape.",
             ) from None
         return path
+
+
+def _is_supported_key_resource(resource: DiscoveredResource) -> bool:
+    return (
+        resource.provider == "azure-storage" and resource.resource_type.casefold() == _STORAGE_RESOURCE_TYPE.casefold()
+    ) or (
+        resource.provider == "azure-cognitive-services"
+        and resource.resource_type.casefold() == _COGNITIVE_RESOURCE_TYPE.casefold()
+    )
 
 
 def _binding(

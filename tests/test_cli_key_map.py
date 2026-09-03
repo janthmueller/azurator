@@ -15,8 +15,7 @@ from typer.testing import CliRunner
 import azurator.cli as cli_module
 from azurator.auth import SubscriptionSelection
 from azurator.cli import app
-from azurator.exporting import DotenvExportAssignment
-from azurator.models import Inventory, KeyMap, KeyMapEntry, MatchReport
+from azurator.models import DotenvKeyAssignment, Inventory, KeyMap, KeyMapEntry, MatchReport
 from tests.cli_test_support import (
     SUBSCRIPTION_ID,
     SUBSCRIPTION_NAME,
@@ -32,12 +31,12 @@ _KEY_TWO = "key-two-must-not-render"
 class FakeExportService:
     def __init__(self, payload: str) -> None:
         self.payload = payload
-        self.calls: list[tuple[str, tuple[DotenvExportAssignment, ...]]] = []
+        self.calls: list[tuple[str, tuple[DotenvKeyAssignment, ...]]] = []
 
     def render(
         self,
         subscription_id: str,
-        assignments: Sequence[DotenvExportAssignment],
+        assignments: Sequence[DotenvKeyAssignment],
     ) -> str:
         self.calls.append((subscription_id, tuple(assignments)))
         return self.payload
