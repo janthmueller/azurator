@@ -2,6 +2,19 @@
 
 <!-- version list -->
 
+## v0.1.0-alpha.4 (2026-09-03)
+
+### Bug Fixes
+
+- **deps**: Update vulnerable Python dependencies
+  ([`835b08c`](https://github.com/janthmueller/azurator/commit/835b08c843dc6d904c8400315277a48d92909841))
+
+### Features
+
+- Support Storage connection string bindings
+  ([`7da65c3`](https://github.com/janthmueller/azurator/commit/7da65c359439f8eda9412884868bba45f96eedaa))
+
+
 ## v0.1.0-alpha.3 (2026-09-02)
 
 ### Features
