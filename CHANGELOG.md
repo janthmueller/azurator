@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v0.1.0-alpha.5 (2026-09-05)
+
+### Features
+
+- Export reusable key maps alongside dotenv files
+  ([`a49e76a`](https://github.com/janthmueller/azurator/commit/a49e76abaa54098a48763bfc8718c168c2b71544))
+
+
 ## v0.1.0-alpha.4 (2026-09-03)
 
 ### Bug Fixes
