@@ -60,9 +60,9 @@ Azurator can identify, update, and verify these stored key copies:
   SOPS-encrypted dotenv file.
 
 Export can exclusively create one new plaintext or SOPS-encrypted dotenv file
-from selected retrievable slots. A secret-free key map can preserve confirmed
-dotenv selector-to-resource-and-slot mappings and drive a later export. Export
-does not merge or replace a file.
+from selected retrievable slots. It can create a companion secret-free key map
+from the exact same assignments, or consume a previously saved map to preserve
+its selectors. Export does not merge or replace a file.
 
 Refresh uses one strict key map to replace only its existing selectors in one
 explicit plaintext or SOPS-encrypted dotenv file with the current Azure values.
@@ -167,6 +167,13 @@ plaintext file or `--sops-out` names a new encrypted file beneath an existing
 resolved parent and confirms the displayed intent before retrieving any key.
 Exactly one output option is required and filenames never select the mode
 implicitly.
+
+For interactive, `--select`, and `--all` selection, optional `--key-map-out`
+creates a companion secret-free map from those exact resolved assignments. It
+is mutually exclusive with `--key-map`, because that input already defines the
+selectors and mappings. Both output paths must be distinct, new files beneath
+existing resolved parents. They are displayed and covered by the same one-time
+confirmation.
 Only installed reviewed key-reading providers may stream the exact two-slot
 state; the renderer retains only selected slots. Plaintext mode exclusively
 creates the canonical dotenv document with mode `0600`. SOPS mode validates
@@ -176,7 +183,12 @@ of ciphertext, decrypts it again from stdin, and compares the complete
 assignment map through fresh HMAC fingerprints before exclusively creating the
 mode-`0600` ciphertext destination. It never prints values, writes SOPS
 plaintext to disk, replaces an existing path, or writes a plan or recovery
-operation.
+operation. When a companion map is requested, both contents are fully staged
+before an ordered exclusive commit. The secret-free map is linked first and
+the dotenv destination second. A handled failure removes outputs already
+created by the call only while they still reference the exact staged inode.
+Abrupt process termination at the commit boundary may therefore leave a map
+without its dotenv file, but never the dotenv file without its map.
 
 ### Refresh
 
@@ -432,6 +444,7 @@ reviewed Azure key slots:
 ```text
 azurator export --out selected-keys.env
 azurator export --sops-out selected-keys.enc.env
+azurator export --sops-out selected-keys.enc.env --key-map-out azurator.keys.json
 azurator export --select '<arm-resource-id>#key1' --out selected-keys.env
 azurator export --all --sops-out selected-keys.enc.env
 azurator match --sops-file existing.enc.env --key-map-out azurator.keys.json
@@ -450,6 +463,12 @@ existing target, displays the full secret-free mapping and mode-specific
 warning, and confirms before it constructs key-reading clients or calls
 `listKeys`.
 
+Optional `--key-map-out` is available with the interactive picker, `--select`,
+or `--all`. It serializes the displayed generated selectors and exact selected
+resource/slot identities, so the resulting artifact can drive `refresh`
+without a separate matching pass. It cannot be combined with `--key-map`, and
+both requested destinations must be distinct and absent.
+
 After confirmation, each selected resource's exact reviewed pair is read once,
 and only selected slots are rendered as raw key assignments. The complete
 document must satisfy the strict canonical single-quoted dotenv and 1 MiB
@@ -462,7 +481,11 @@ ciphertext is atomically and exclusively written with mode `0600`. The user must
 provide both a SOPS creation rule or environment recipient configuration and a
 locally usable decryption identity. A concurrent destination wins and Azurator
 fails without replacement. Cancellation, partial provider failure, invalid key
-text, SOPS or round-trip failure, and file failure produce no destination.
+text, SOPS or round-trip failure, and handled file failure produce no
+destination. For a companion export, both outputs are staged first and
+committed map-first. Handled commit failures inode-check and remove anything
+created by that call. An abrupt process stop during the short commit window can
+leave only the secret-free map.
 Values never reach stdout, logs, plans, operations, exception messages, ordinary
 arguments, or a plaintext temporary. Neither mode supports merge, append, or
 overwrite.

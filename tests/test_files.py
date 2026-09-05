@@ -15,6 +15,7 @@ from azurator.files import (
     UnsafeInputPathError,
     UnsafeOutputPathError,
     create_private_bytes,
+    create_private_file_set,
     create_private_text,
     ensure_private_directory,
     managed_plaintext_permissions_are_broad,
@@ -111,6 +112,68 @@ def test_create_private_bytes_is_private_complete_and_exclusive(tmp_path: Path) 
     with pytest.raises(FileExistsError):
         create_private_bytes(destination, b"replacement")
     assert destination.read_bytes() == ciphertext
+
+
+def test_create_private_file_set_commits_every_output_privately(tmp_path: Path) -> None:
+    key_map = tmp_path / "azurator.keys.json"
+    dotenv = tmp_path / "secrets.env"
+
+    create_private_file_set(((key_map, '{"schema_version":"1"}\n'), (dotenv, b"TOKEN=secret\n")))
+
+    assert key_map.read_text(encoding="utf-8") == '{"schema_version":"1"}\n'
+    assert dotenv.read_bytes() == b"TOKEN=secret\n"
+    if os.name != "nt":
+        assert stat.S_IMODE(key_map.stat().st_mode) == 0o600
+        assert stat.S_IMODE(dotenv.stat().st_mode) == 0o600
+    assert list(tmp_path.glob(".*.*")) == []
+
+
+def test_create_private_file_set_rolls_back_earlier_output_after_a_destination_race(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    key_map = tmp_path / "azurator.keys.json"
+    dotenv = tmp_path / "secrets.env"
+    real_link = files_module.os.link
+
+    def race_second_destination(source: Path, destination: Path) -> None:
+        if Path(destination) == dotenv:
+            dotenv.write_text("winner\n", encoding="utf-8")
+        real_link(source, destination)
+
+    monkeypatch.setattr(files_module.os, "link", race_second_destination)
+
+    with pytest.raises(FileExistsError):
+        create_private_file_set(((key_map, "metadata\n"), (dotenv, "TOKEN=secret\n")))
+
+    assert not key_map.exists()
+    assert dotenv.read_text(encoding="utf-8") == "winner\n"
+    assert list(tmp_path.glob(".*.*")) == []
+
+
+def test_create_private_file_set_does_not_remove_a_replaced_rollback_target(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    key_map = tmp_path / "azurator.keys.json"
+    dotenv = tmp_path / "secrets.env"
+    real_link = files_module.os.link
+
+    def replace_first_and_race_second(source: Path, destination: Path) -> None:
+        if Path(destination) == dotenv:
+            key_map.unlink()
+            key_map.write_text("replacement\n", encoding="utf-8")
+            dotenv.write_text("winner\n", encoding="utf-8")
+        real_link(source, destination)
+
+    monkeypatch.setattr(files_module.os, "link", replace_first_and_race_second)
+
+    with pytest.raises(UnsafeOutputPathError, match="could not be rolled back safely"):
+        create_private_file_set(((key_map, "metadata\n"), (dotenv, "TOKEN=secret\n")))
+
+    assert key_map.read_text(encoding="utf-8") == "replacement\n"
+    assert dotenv.read_text(encoding="utf-8") == "winner\n"
+    assert list(tmp_path.glob(".*.*")) == []
 
 
 def test_ensure_private_directory_creates_hardens_and_rejects_unsafe_targets(

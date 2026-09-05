@@ -102,12 +102,13 @@ def _resolve_default_subscription(_value: str | None) -> SubscriptionSelection:
     return SubscriptionSelection(SUBSCRIPTION_ID, SUBSCRIPTION_NAME)
 
 
-def test_export_help_exposes_key_map_as_a_selection_mode() -> None:
+def test_export_help_exposes_key_map_input_and_companion_output() -> None:
     result = CliRunner().invoke(app, ["export", "--help"])
     output = Text.from_ansi(result.output).plain
 
     assert result.exit_code == 0
     assert "--key-map" in output
+    assert "--key-map-out" in output
 
 
 def test_match_writes_minimal_private_key_map_from_confirmed_matches(
@@ -367,6 +368,30 @@ def test_export_key_map_is_a_separate_selection_mode(
 
     assert result.exit_code == 1
     assert "cannot be used together" in result.output
+
+
+def test_export_rejects_key_map_input_with_companion_key_map_output_before_azure_access(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(cli_module, "_resolve_subscription", _fail_subscription_resolution)
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "export",
+            "--key-map",
+            str(tmp_path / "input.json"),
+            "--key-map-out",
+            str(tmp_path / "output.json"),
+            "--out",
+            str(tmp_path / "keys.env"),
+            "--yes",
+        ],
+    )
+
+    assert result.exit_code == 1
+    assert "--key-map and --key-map-out cannot be used together" in result.output
 
 
 @pytest.mark.skipif(os.name == "nt", reason="symlink setup requires POSIX semantics")

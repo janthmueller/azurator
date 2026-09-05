@@ -56,6 +56,7 @@ from azurator.files import (
     UnsafeInputPathError,
     UnsafeOutputPathError,
     create_private_bytes,
+    create_private_file_set,
     create_private_text,
     ensure_private_directory,
     managed_plaintext_permissions_are_broad,
@@ -66,7 +67,7 @@ from azurator.files import (
     write_private_text,
 )
 from azurator.inputs import SecretInputError
-from azurator.key_map import KeyMapError, build_key_map, parse_key_map
+from azurator.key_map import KeyMapError, build_export_key_map, build_key_map, parse_key_map
 from azurator.matching import MatchingError
 from azurator.models import (
     DiscoveredResource,
@@ -1048,6 +1049,11 @@ def export_keys(
         "--key-map",
         help="Export the exact selectors and Azure key slots from a key-map JSON file.",
     ),
+    key_map_out: Path | None = typer.Option(
+        None,
+        "--key-map-out",
+        help="Create a reusable key map alongside the dotenv export.",
+    ),
     yes: bool = typer.Option(
         False,
         "--yes",
@@ -1067,6 +1073,8 @@ def export_keys(
     selection_modes = int(all_slots) + int(bool(selector_values)) + int(key_map_file is not None)
     if selection_modes > 1:
         _fail("--all, --select, and --key-map cannot be used together")
+    if key_map_file is not None and key_map_out is not None:
+        _fail("--key-map and --key-map-out cannot be used together")
     if selection_modes == 0 and not _interactive_terminal_available():
         _fail("interactive key selection requires a terminal; use --select, --all, or --key-map instead")
 
@@ -1083,6 +1091,23 @@ def export_keys(
         _fail("the dotenv export destination could not be inspected safely")
     else:
         _fail("refusing to replace an existing dotenv export destination")
+
+    key_map_destination: Path | None = None
+    if key_map_out is not None:
+        try:
+            key_map_destination = resolve_parent_path(key_map_out)
+        except OSError:
+            _fail("the key-map export destination has a missing or unsafe parent directory")
+        if _paths_refer_to_same_file(destination, key_map_destination):
+            _fail("--key-map-out must not refer to the dotenv export destination")
+        try:
+            key_map_destination.lstat()
+        except FileNotFoundError:
+            pass
+        except OSError:
+            _fail("the key-map export destination could not be inspected safely")
+        else:
+            _fail("refusing to replace an existing key-map export destination")
 
     loaded_key_map: KeyMap | None = None
     if key_map_file is not None:
@@ -1161,19 +1186,42 @@ def export_keys(
         except ExportError as error:
             _fail(str(error))
 
+    key_map_payload = ""
+    if key_map_destination is not None:
+        try:
+            generated_key_map = build_export_key_map(
+                selected_subscription.subscription_id,
+                assignments,
+            )
+            key_map_payload = generated_key_map.model_dump_json(indent=2) + "\n"
+            if len(key_map_payload.encode("utf-8")) > _MAX_JSON_ARTIFACT_BYTES:
+                _fail("the generated key map exceeds the supported artifact size limit")
+        except KeyMapError as error:
+            _fail(str(error))
+        except UnicodeError:
+            _fail("the generated key map violates the supported UTF-8 contract")
+
     detail = _output_detail(context)
     _render_export_intent(
         assignments,
         destination,
         selected_subscription,
         encrypted=encrypted,
+        key_map_destination=key_map_destination,
         detail=detail,
     )
-    confirmation = (
-        "Encrypt these Azure keys into the displayed SOPS dotenv file?"
-        if encrypted
-        else "Write these Azure keys to the displayed plaintext dotenv file?"
-    )
+    if key_map_destination is not None:
+        confirmation = (
+            "Create the displayed SOPS dotenv file and key map?"
+            if encrypted
+            else "Create the displayed plaintext dotenv file and key map?"
+        )
+    else:
+        confirmation = (
+            "Encrypt these Azure keys into the displayed SOPS dotenv file?"
+            if encrypted
+            else "Write these Azure keys to the displayed plaintext dotenv file?"
+        )
     if not yes and not _confirm_mutation(confirmation):
         typer.echo("Export cancelled.")
         return
@@ -1194,10 +1242,26 @@ def export_keys(
                 assignments,
             )
             if sops_export is None:
-                create_private_text(destination, payload)
+                if key_map_destination is None:
+                    create_private_text(destination, payload)
+                else:
+                    create_private_file_set(
+                        (
+                            (key_map_destination, key_map_payload),
+                            (destination, payload),
+                        )
+                    )
             else:
                 ciphertext = sops_export.encrypt(payload, destination)
-                create_private_bytes(destination, ciphertext)
+                if key_map_destination is None:
+                    create_private_bytes(destination, ciphertext)
+                else:
+                    create_private_file_set(
+                        (
+                            (key_map_destination, key_map_payload),
+                            (destination, ciphertext),
+                        )
+                    )
     except (
         AuthConfigurationError,
         AuthenticationRequiredError,
@@ -1214,8 +1278,10 @@ def export_keys(
     except ExportError as error:
         _fail(f"{error}; no file was created")
     except PrivateFileExistsError:
-        _fail("the dotenv export destination appeared concurrently; no file was replaced")
+        _fail("an export destination appeared concurrently; no file was replaced")
     except (OSError, UnicodeError, UnsafeOutputPathError):
+        if key_map_destination is not None:
+            _fail("the dotenv export and key map could not be written safely; inspect the displayed destinations")
         _fail("the dotenv export could not be written safely")
     finally:
         payload = ""
@@ -1229,14 +1295,18 @@ def export_keys(
         assignment_noun = "assignment" if assignment_count == 1 else "assignments"
         alias_summary = f" as {assignment_count} dotenv {assignment_noun}"
     if encrypted:
-        typer.echo(
-            f"Exported {slot_count} Azure {slot_noun}{alias_summary} to SOPS-encrypted dotenv file {destination}."
+        summary_line = (
+            f"Exported {slot_count} Azure {slot_noun}{alias_summary} to SOPS-encrypted dotenv file {destination}"
         )
-        if detail >= OutputDetail.verbose:
-            typer.echo("Key values were encrypted before the file was written and were not printed.")
     else:
-        typer.echo(f"Exported {slot_count} Azure {slot_noun}{alias_summary} to plaintext dotenv file {destination}.")
-        if detail >= OutputDetail.verbose:
+        summary_line = f"Exported {slot_count} Azure {slot_noun}{alias_summary} to plaintext dotenv file {destination}"
+    if key_map_destination is not None:
+        summary_line += f" and wrote key map {key_map_destination}"
+    typer.echo(f"{summary_line}.")
+    if detail >= OutputDetail.verbose:
+        if encrypted:
+            typer.echo("Key values were encrypted before the file was written and were not printed.")
+        else:
             typer.echo("Key values were written only to that file and were not printed.")
 
 

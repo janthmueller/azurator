@@ -327,6 +327,7 @@ def render_export_intent(
     subscription: SubscriptionSelection,
     *,
     encrypted: bool,
+    key_map_destination: Path | None = None,
     detail: OutputDetail = OutputDetail.normal,
 ) -> None:
     """Render the complete secret-free plaintext or SOPS export intent."""
@@ -343,6 +344,8 @@ def render_export_intent(
     console.print(f"[bold]{title}[/bold] [dim]· {summary}[/dim]")
     console.print(f"[dim]Subscription {subscription_label(subscription.subscription_id, subscription.name)}[/dim]")
     console.print(f"[dim]Destination {escape(str(destination))}[/dim]")
+    if key_map_destination is not None:
+        console.print(f"[dim]Key map {escape(str(key_map_destination))}[/dim]")
     console.print()
     table = Table()
     table.add_column("Environment selector")

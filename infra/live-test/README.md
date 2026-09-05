@@ -152,11 +152,13 @@ Azurator commands. It:
    `match --skip-azure-bindings --json` that the old value no longer matches;
 6. immediately removes the pre-rotation snapshot;
 7. creates a disposable private age identity and asks `azurator export
-   --sops-out` to create one SOPS-encrypted dotenv file containing only the
-   tagged enabled rotation Storage `key1`, Storage `key2`, and Azure OpenAI
-   `Key1`; no plaintext export is created for this managed path;
-8. adds one exact alias for each selected key plus an unrelated value and an
-   empty assignment inside the ciphertext;
+   --sops-out --key-map-out` to create one SOPS-encrypted dotenv file containing
+   only the tagged enabled rotation Storage `key1`, Storage `key2`, and Azure
+   OpenAI `Key1` plus its exact secret-free map; no plaintext export is created
+   for this managed path;
+8. verifies and removes that bootstrap map, then adds one exact alias for each
+   selected key plus an unrelated value and an empty assignment inside the
+   ciphertext;
 9. writes a secret-free key map from the six confirmed assignments, uses that
    map to create a second SOPS file containing exactly those six assignments,
    verifies all three source-to-alias pairs across both Storage slots and Azure

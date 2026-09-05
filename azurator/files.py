@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 import stat
 import tempfile
-from collections.abc import Generator
+from collections.abc import Generator, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
 from hashlib import sha256
@@ -522,64 +522,120 @@ def write_private_text(path: Path, content: str) -> None:
             pass
 
 
+def create_private_file_set(
+    outputs: Sequence[tuple[Path, str | bytes | bytearray]],
+) -> None:
+    """Stage and exclusively create an ordered set of durable private files.
+
+    If a normal commit error occurs, files already linked by this call are
+    removed only while they still reference the exact staged inode. Callers
+    should order non-secret metadata before secret-bearing output so abrupt
+    process termination cannot expose the latter without the former.
+    """
+
+    if not outputs:
+        raise ValueError("at least one private output is required")
+
+    normalized_paths: set[str] = set()
+    destinations: list[tuple[Path, str | bytes | bytearray]] = []
+    for path, content in outputs:
+        destination = path.expanduser()
+        identity = os.path.normcase(str(Path(os.path.abspath(destination))))
+        if identity in normalized_paths:
+            raise UnsafeOutputPathError("private output destinations must be distinct")
+        normalized_paths.add(identity)
+        try:
+            destination.lstat()
+        except FileNotFoundError:
+            pass
+        else:
+            raise PrivateFileExistsError(f"refusing to replace existing private file: {destination}")
+        destinations.append((destination, content))
+
+    temporaries: list[Path] = []
+    staged: list[tuple[Path, Path, os.stat_result]] = []
+    linked: list[tuple[Path, os.stat_result]] = []
+    changed_parents: set[Path] = set()
+    try:
+        for destination, content in destinations:
+            parent = _prepare_parent(destination)
+            descriptor, temporary_name = tempfile.mkstemp(prefix=f".{destination.name}.", dir=parent)
+            temporary = Path(temporary_name)
+            temporaries.append(temporary)
+            try:
+                if os.name != "nt":
+                    os.fchmod(descriptor, 0o600)
+                if isinstance(content, str):
+                    with os.fdopen(descriptor, "w", encoding="utf-8", newline="\n") as stream:
+                        descriptor = -1
+                        stream.write(content)
+                        stream.flush()
+                        os.fsync(stream.fileno())
+                else:
+                    with os.fdopen(descriptor, "wb") as stream:
+                        descriptor = -1
+                        stream.write(content)
+                        stream.flush()
+                        os.fsync(stream.fileno())
+                staged.append((destination, temporary, temporary.lstat()))
+            finally:
+                if descriptor >= 0:
+                    os.close(descriptor)
+
+        for destination, temporary, metadata in staged:
+            try:
+                os.link(temporary, destination)
+            except FileExistsError as error:
+                raise PrivateFileExistsError(f"refusing to replace existing private file: {destination}") from error
+            linked.append((destination, metadata))
+            changed_parents.add(destination.parent)
+
+        for temporary in temporaries:
+            temporary.unlink()
+        for parent in changed_parents:
+            _fsync_parent_directory(parent)
+    except BaseException as error:
+        rollback_failed = False
+        for destination, metadata in reversed(linked):
+            try:
+                current = destination.lstat()
+                if (current.st_dev, current.st_ino) != (metadata.st_dev, metadata.st_ino):
+                    rollback_failed = True
+                    continue
+                destination.unlink()
+            except FileNotFoundError:
+                continue
+            except OSError:
+                rollback_failed = True
+        for temporary in temporaries:
+            try:
+                temporary.unlink()
+            except FileNotFoundError:
+                continue
+            except OSError:
+                rollback_failed = True
+        for parent in changed_parents:
+            try:
+                _fsync_parent_directory(parent)
+            except OSError:
+                rollback_failed = True
+        if rollback_failed:
+            raise UnsafeOutputPathError(
+                "a partially created private file set could not be rolled back safely"
+            ) from error
+        raise
+
+
 def create_private_text(path: Path, content: str) -> None:
     """Atomically and exclusively create a durable private UTF-8 file."""
 
-    destination = path.expanduser()
-    parent = _prepare_parent(destination)
-    descriptor, temporary_name = tempfile.mkstemp(prefix=f".{destination.name}.", dir=parent)
-    temporary = Path(temporary_name)
-    try:
-        if os.name != "nt":
-            os.fchmod(descriptor, 0o600)
-        with os.fdopen(descriptor, "w", encoding="utf-8", newline="\n") as stream:
-            descriptor = -1
-            stream.write(content)
-            stream.flush()
-            os.fsync(stream.fileno())
-        try:
-            os.link(temporary, destination)
-        except FileExistsError as error:
-            raise PrivateFileExistsError(f"refusing to replace existing private file: {destination}") from error
-        temporary.unlink()
-        _fsync_parent_directory(parent)
-    finally:
-        if descriptor >= 0:
-            os.close(descriptor)
-        try:
-            temporary.unlink()
-        except FileNotFoundError:
-            pass
+    create_private_file_set(((path, content),))
 
 
 def create_private_bytes(path: Path, content: bytes | bytearray) -> None:
     """Atomically and exclusively create a durable private binary file."""
 
-    destination = path.expanduser()
-    parent = _prepare_parent(destination)
-    descriptor, temporary_name = tempfile.mkstemp(prefix=f".{destination.name}.", dir=parent)
-    temporary = Path(temporary_name)
-    try:
-        if os.name != "nt":
-            os.fchmod(descriptor, 0o600)
-        with os.fdopen(descriptor, "wb") as stream:
-            descriptor = -1
-            stream.write(content)
-            stream.flush()
-            os.fsync(stream.fileno())
-        try:
-            os.link(temporary, destination)
-        except FileExistsError as error:
-            raise PrivateFileExistsError(f"refusing to replace existing private file: {destination}") from error
-        temporary.unlink()
-        _fsync_parent_directory(parent)
-    finally:
-        if descriptor >= 0:
-            os.close(descriptor)
-        try:
-            temporary.unlink()
-        except FileNotFoundError:
-            pass
+    create_private_file_set(((path, content),))
 
 
 def remove_private_text(path: Path) -> None:

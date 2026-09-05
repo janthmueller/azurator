@@ -64,7 +64,18 @@ types. It does not mean every secret in Azure.
 
 ## Reuse selector mappings
 
-Create a secret-free key map from the confirmed matches in an existing file:
+Create a file and its reusable key map together:
+
+```bash
+azurator export \
+  --sops-out azure-keys.enc.env \
+  --key-map-out azurator.keys.json
+```
+
+The map records the displayed selector, Azure resource, and slot for every
+exported assignment. It contains no key values and can drive a later `refresh`.
+
+If the file already exists without a map, derive one from confirmed matches:
 
 ```bash
 azurator match --sops-file secrets.enc.env --key-map-out azurator.keys.json
@@ -118,11 +129,14 @@ refresh both ask once for confirmation unless `-y` is used.
 
 ## Destination guarantees
 
-Export creates one new mode-`0600` file on POSIX systems and never prints key
-values. Exactly one of `--out` and `--sops-out` is required. The destination
-must not already exist. Azurator never infers encryption from a filename and
-never overwrites, merges, appends, or writes exported values to stdout.
-Cancellation and failures leave no destination.
+Export creates the dotenv destination with mode `0600` on POSIX systems and
+never prints key values. Exactly one of `--out` and `--sops-out` is required.
+The destination must not already exist. Azurator never infers encryption from a
+filename and never overwrites, merges, appends, or writes exported values to
+stdout.
+`--key-map-out` also requires a new, distinct path and cannot be combined with
+`--key-map`. The map also uses mode `0600` on POSIX. Both outputs use the same
+confirmation. Cancellation and handled failures leave neither destination.
 
 Choose one selection mode: `--key-map`, `--select`, `--all`, or the interactive
 picker.

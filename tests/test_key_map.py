@@ -8,8 +8,8 @@ import pytest
 from pydantic import ValidationError
 
 from azurator.exporting import ExportError, build_key_map_export_assignments
-from azurator.key_map import KeyMapError, build_key_map, parse_key_map
-from azurator.models import KeyAuthentication, KeyMap, KeyMapEntry, KeyMatch
+from azurator.key_map import KeyMapError, build_export_key_map, build_key_map, parse_key_map
+from azurator.models import DotenvKeyAssignment, KeyAuthentication, KeyMap, KeyMapEntry, KeyMatch
 from tests.cli_test_support import SUBSCRIPTION_ID, make_inventory, make_match_report
 
 
@@ -56,6 +56,56 @@ def test_key_map_projects_confirmed_matches_in_input_order_and_preserves_aliases
     assert set(payload) == {"schema_version", "subscription_id", "mappings"}
     assert "generated_at" not in payload
     assert "source_path" not in payload
+
+
+def test_key_map_projects_resolved_export_assignments_without_values() -> None:
+    inventory = make_inventory()
+    resource = inventory.resources[0]
+    assignments = (
+        DotenvKeyAssignment(
+            resource=resource,
+            resource_group="rg",
+            key_slot="key1",
+            selector="PRIMARY_KEY",
+        ),
+        DotenvKeyAssignment(
+            resource=resource,
+            resource_group="rg",
+            key_slot="key2",
+            selector="SECONDARY_KEY",
+        ),
+    )
+
+    key_map = build_export_key_map(SUBSCRIPTION_ID, assignments)
+
+    assert key_map == KeyMap(
+        subscription_id=SUBSCRIPTION_ID,
+        mappings=(
+            KeyMapEntry(selector="PRIMARY_KEY", key_resource_id=resource.resource_id, key_slot="key1"),
+            KeyMapEntry(selector="SECONDARY_KEY", key_resource_id=resource.resource_id, key_slot="key2"),
+        ),
+    )
+    assert set(json.loads(key_map.model_dump_json())) == {"schema_version", "subscription_id", "mappings"}
+
+
+def test_export_key_map_rejects_empty_duplicate_or_unknown_assignments() -> None:
+    resource = make_inventory().resources[0]
+    assignment = DotenvKeyAssignment(
+        resource=resource,
+        resource_group="rg",
+        key_slot="key1",
+        selector="PRIMARY_KEY",
+    )
+
+    with pytest.raises(KeyMapError, match="no Azure key assignments"):
+        build_export_key_map(SUBSCRIPTION_ID, ())
+    with pytest.raises(KeyMapError, match="selector more than once"):
+        build_export_key_map(SUBSCRIPTION_ID, (assignment, assignment))
+    with pytest.raises(KeyMapError, match="unknown Azure key slot"):
+        build_export_key_map(
+            SUBSCRIPTION_ID,
+            (assignment.model_copy(update={"key_slot": "unknown"}),),
+        )
 
 
 def test_key_map_rejects_ambiguous_or_duplicate_report_matches() -> None:

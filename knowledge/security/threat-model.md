@@ -20,7 +20,8 @@ surface described in [product behavior](../product/behavior.md). It covers:
   and updates;
 - reviewed Azure Storage Shared Key connection-string parsing and exact
   `AccountKey` replacement within those bindings;
-- exclusive plaintext and verified SOPS-encrypted dotenv export;
+- exclusive plaintext and verified SOPS-encrypted dotenv export, optionally
+  paired with a secret-free reusable key map;
 - secret-free reusable key-map creation and map-driven export;
 - strict key-map-driven refresh of existing plaintext and SOPS dotenv files;
 - generated plans, confirmed rotation, retained operations, and resume.
@@ -148,6 +149,14 @@ account keys that existed around a rotation.
    must match its recorded scope, and every exact mapping is resolved against
    the current inventory before key retrieval. Aliases may share a slot, but
    unlisted sibling slots are never inferred.
+   Interactive, direct, and all-slot selection may instead request one
+   companion `--key-map-out` derived from the exact displayed assignments. The
+   two destinations must be distinct and absent, and one confirmation covers
+   both. The complete map and dotenv contents are staged privately. The
+   secret-free map is exclusively linked first, followed by the plaintext
+   destination. A handled commit failure rolls back only exact staged inodes.
+   Abrupt termination in that short boundary may leave the map alone, but
+   cannot leave the plaintext destination without its map.
 9. **Managed SOPS boundary.** SOPS and its configured key backends manage
    encryption at rest and recipient metadata. Azurator accepts only the reviewed
    SOPS 3.13.x dotenv status/decrypt/set command shapes. The source must be one
@@ -165,7 +174,10 @@ account keys that existed around a rotation.
     every value with a fresh process-local HMAC key. Only verified ciphertext is
     exclusively created at the destination with mode `0600`. Plaintext never
     enters a file or process argument. Cancellation, encryption or verification
-    failure, and a destination race leave no destination.
+    failure, and a handled destination race leave no destination. Optional
+    companion key-map creation uses the same validation, ordering, rollback,
+    and abrupt-termination boundary as plaintext export, with verified
+    ciphertext in place of plaintext.
 11. **Key-map refresh boundary.** `refresh` requires one strict key map and one
     existing plaintext or SOPS dotenv target. The selected subscription and
     every resource, slot, and selector are validated before key retrieval. A
@@ -483,6 +495,17 @@ object level. Canonical subscription scope, dotenv selectors, complete top-level
 ARM IDs, embedded resource subscription, and slot-name syntax are validated
 before Azure access. Resource IDs and selector names can still reveal operational
 context.
+
+`export --key-map-out` is the bootstrap path when no existing dotenv file
+supplies application-specific selectors. It records the exact generated
+selectors displayed for an interactive, direct, or all-slot export. The
+existing `--key-map` selection mode cannot be combined with it because that
+input already is the reusable mapping. Both output paths are validated before
+Azure access and covered by one confirmation. Their contents are privately
+staged and exclusively committed map-first. Handled failures remove only exact
+files created by that commit. Process termination between the two links can
+leave a secret-free map without a dotenv file; the reverse ordering is not
+possible.
 
 An `export --out` destination is plaintext at rest and becomes the user's
 responsibility. Interactive, `--select`, and `--all` exports use deterministic

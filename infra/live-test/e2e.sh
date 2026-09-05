@@ -209,6 +209,38 @@ validate_key_map() {
   fi
 }
 
+validate_export_key_map() {
+  local path="$1"
+  local storage_selector="$2"
+  local storage_secondary_selector="$3"
+  local openai_selector="$4"
+
+  [[ -f "$path" && ! -L "$path" && "$(stat -c '%a' "$path")" == "600" ]] \
+    || fail "the export key map did not satisfy the private regular-file contract"
+
+  # jq variables, not shell variables, are intentionally expanded here.
+  # shellcheck disable=SC2016
+  if ! "$JQ_BIN" -e \
+    --arg subscription_id "$SUBSCRIPTION_ID" \
+    --arg storage_id "$STORAGE_ACCOUNT_ID" \
+    --arg openai_id "$OPENAI_ACCOUNT_ID" \
+    --arg storage "$storage_selector" \
+    --arg storage_secondary "$storage_secondary_selector" \
+    --arg openai "$openai_selector" \
+    '
+      (keys | sort) == ["mappings", "schema_version", "subscription_id"]
+      and .schema_version == "1"
+      and .subscription_id == $subscription_id
+      and .mappings == [
+        {selector: $storage, key_resource_id: $storage_id, key_slot: "key1"},
+        {selector: $storage_secondary, key_resource_id: $storage_id, key_slot: "key2"},
+        {selector: $openai, key_resource_id: $openai_id, key_slot: "Key1"}
+      ]
+    ' "$path" >/dev/null; then
+    fail "the export key map did not preserve the exact generated selectors and slots"
+  fi
+}
+
 validate_mapped_sops_document() {
   local path="$1"
   local storage_selector="$2"
@@ -1311,9 +1343,12 @@ main() {
     --select "$STORAGE_ACCOUNT_ID#key1" \
     --select "$STORAGE_ACCOUNT_ID#key2" \
     --select "$OPENAI_ACCOUNT_ID#Key1" \
-    --sops-out "$managed_sops"
+    --sops-out "$managed_sops" \
+    --key-map-out "$key_map"
 
   if [[ ! -f "$managed_sops" ]]; then
+    [[ ! -e "$key_map" ]] \
+      || fail "a cancelled managed export created only its key map"
     printf 'Export was cancelled; no rotation was attempted.\n'
     remove_workspace
     run_lifecycle down
@@ -1345,6 +1380,9 @@ main() {
     || fail "the Azure OpenAI export selector did not satisfy the reviewed dotenv contract"
   [[ "$openai_selector" != "$storage_selector" && "$openai_selector" != "$storage_secondary_selector" ]] \
     || fail "the exported dotenv selectors were not unique"
+  validate_export_key_map \
+    "$key_map" "$storage_selector" "$storage_secondary_selector" "$openai_selector"
+  rm -f -- "$key_map"
 
   copy_sops_assignment "$storage_selector" "$STORAGE_LOCAL_ALIAS" "$managed_sops"
   copy_sops_assignment \
@@ -1359,7 +1397,8 @@ main() {
   [[ ! -L "$age_identity" && "$(stat -c '%a' "$age_identity")" == "600" ]] \
     || fail "the disposable age identity did not satisfy the private mode-0600 contract"
   printf '%s\n' \
-    'Exported directly to SOPS ciphertext and added one grouped alias for each selected slot.' \
+    'Exported directly to SOPS ciphertext with its exact reusable key map.' \
+    'Verified and removed that bootstrap map, then added one grouped alias for each selected slot.' \
     'The encrypted document also contains one unrelated value and one empty assignment.'
 
   printf '\nStep 5/7: reusable key map, SOPS recreation, and executable bridge plan\n'

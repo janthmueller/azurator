@@ -10,7 +10,7 @@ from azure.mgmt.core.tools import parse_resource_id
 from pydantic import ValidationError
 
 from azurator.inputs import SecretInputError, validate_dotenv_selector
-from azurator.models import KeyMap, KeyMapEntry, MatchReport, MatchResource
+from azurator.models import DotenvKeyAssignment, KeyMap, KeyMapEntry, MatchReport, MatchResource
 
 _KEY_SLOT_PATTERN = re.compile(r"^[A-Za-z][A-Za-z0-9]*$")
 
@@ -154,6 +154,36 @@ def build_key_map(report: MatchReport) -> KeyMap:
         raise KeyMapError("no confirmed Azure key matches are available for a key map")
     key_map = KeyMap(subscription_id=report.subscription_id, mappings=tuple(mappings))
     _validate_key_map_contract(key_map, source="the match report")
+    return key_map
+
+
+def build_export_key_map(
+    subscription_id: str,
+    assignments: tuple[DotenvKeyAssignment, ...],
+) -> KeyMap:
+    """Project resolved export assignments into their reusable key map."""
+
+    if not assignments:
+        raise KeyMapError("no Azure key assignments are available for a key map")
+
+    mappings: list[KeyMapEntry] = []
+    selectors: set[str] = set()
+    for assignment in assignments:
+        if assignment.selector in selectors:
+            raise KeyMapError("the export assignments contain one dotenv selector more than once")
+        selectors.add(assignment.selector)
+        if assignment.key_slot not in {slot.name for slot in assignment.resource.key_slots}:
+            raise KeyMapError("an export assignment references an unknown Azure key slot")
+        mappings.append(
+            KeyMapEntry(
+                selector=assignment.selector,
+                key_resource_id=assignment.resource.resource_id,
+                key_slot=assignment.key_slot,
+            )
+        )
+
+    key_map = KeyMap(subscription_id=subscription_id, mappings=tuple(mappings))
+    _validate_key_map_contract(key_map, source="the export assignments")
     return key_map
 
 

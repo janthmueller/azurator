@@ -148,9 +148,9 @@ assert_no_secret_output "$success_root"
 grep -Fq "azurator auth status --subscription $SUBSCRIPTION_ID" "$success_root/calls.log" \
   || fail "authentication scope was not preflighted"
 grep -Fq "azurator export" "$success_root/calls.log" || fail "export was not exercised"
-grep -Fq "azurator export --subscription $SUBSCRIPTION_ID --select $STORAGE_ACCOUNT_ID#key1 --select $STORAGE_ACCOUNT_ID#key2 --select $OPENAI_ACCOUNT_ID#Key1 --sops-out" \
+grep -Eq "^azurator export --subscription $SUBSCRIPTION_ID --select $STORAGE_ACCOUNT_ID#key1 --select $STORAGE_ACCOUNT_ID#key2 --select $OPENAI_ACCOUNT_ID#Key1 --sops-out .* --key-map-out .*/azurator\.keys\.json$" \
   "$success_root/calls.log" \
-  || fail "managed export did not select both Storage slots and Azure OpenAI Key1"
+  || fail "managed export did not select both Storage slots, Azure OpenAI Key1, and its companion map"
 grep -Eq "^azurator match --subscription $SUBSCRIPTION_ID --sops-file .* --key-map-out .*/azurator\.keys\.json$" \
   "$success_root/calls.log" \
   || fail "the reusable key map was not created from the managed SOPS file"

@@ -350,6 +350,31 @@ write_key_map() {
   mv -f -- "$temporary" "$destination"
 }
 
+write_export_key_map() {
+  local destination="$1"
+  local temporary
+  temporary="$(mktemp "${destination%/*}/.fake-export-key-map.XXXXXXXX")"
+  # jq variables, not shell variables, are intentionally expanded here.
+  # shellcheck disable=SC2016
+  "$JQ_BIN" -n \
+    --arg subscription_id "$SUBSCRIPTION_ID" \
+    --arg storage_id "$STORAGE_ACCOUNT_ID" \
+    --arg openai_id "$OPENAI_ACCOUNT_ID" \
+    '
+      {
+        schema_version: "1",
+        subscription_id: $subscription_id,
+        mappings: [
+          {selector: "AZURATOR_STORAGE_STAZURATORTEST_KEY1", key_resource_id: $storage_id, key_slot: "key1"},
+          {selector: "AZURATOR_STORAGE_STAZURATORTEST_KEY2", key_resource_id: $storage_id, key_slot: "key2"},
+          {selector: "AZURATOR_COGNITIVE_AOAI_AZURATOR_TEST_KEY1", key_resource_id: $openai_id, key_slot: "Key1"}
+        ]
+      }
+    ' >"$temporary"
+  chmod 600 "$temporary"
+  mv -f -- "$temporary" "$destination"
+}
+
 write_sops_plan() {
   local sops_path="$1"
   local omit_restore=false
@@ -617,6 +642,9 @@ run_azurator() {
             >"$ciphertext_temp"
         mv -f -- "$ciphertext_temp" "$destination"
         chmod 600 "$destination"
+        if has_option --key-map-out "$@"; then
+          write_export_key_map "$(option_value --key-map-out "$@")"
+        fi
       fi
       printf 'Fake private dotenv export created.\n'
       ;;

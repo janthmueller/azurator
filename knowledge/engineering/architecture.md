@@ -65,8 +65,9 @@ Production code lives directly in `azurator/`, with no `src/` wrapper.
   artifact.
 - `files.py`, `inputs.py`, `fingerprints.py`, and `sops.py` own the reviewed
   local secret and persistence boundaries.
-- `key_map.py` projects confirmed matches into the strict reusable secret-free
-  mapping artifact and validates that artifact when it is loaded.
+- `key_map.py` projects confirmed matches or resolved export assignments into
+  the strict reusable secret-free mapping artifact and validates that artifact
+  when it is loaded.
 - `credential_values.py` recognizes and updates the reviewed raw and structured
   values that may hold one Azure key.
 - `exporting.py` resolves key-slot assignments and renders new plaintext or
