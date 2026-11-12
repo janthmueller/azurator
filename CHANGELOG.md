@@ -2,6 +2,17 @@
 
 <!-- version list -->
 
+## v0.1.0-alpha.6 (2026-11-12)
+
+### Bug Fixes
+
+- **deps**: Update vulnerable docs dependencies
+  ([`b1837f7`](https://github.com/janthmueller/azurator/commit/b1837f7bf29dfcd3dfe579c465429f6984ebc295))
+
+- **security**: Verify SOPS encryption for every managed key
+  ([`6c8d44b`](https://github.com/janthmueller/azurator/commit/6c8d44b4f1b75a6a9f10830dcaa32a6b346063aa))
+
+
 ## v0.1.0-alpha.5 (2026-09-05)
 
 ### Features
