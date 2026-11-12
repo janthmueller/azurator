@@ -49,7 +49,7 @@ from azurator.providers.base import (
     ProviderOperationError,
 )
 from azurator.providers.resource_ids import ResourceIdError, resource_coordinates
-from azurator.sops import SopsCli, SopsCommand, SopsError
+from azurator.sops import SopsCli, SopsCommand, SopsEncryptionError, SopsError
 
 _PROVIDER_NAME = "local-sops-dotenv-file"
 _PROVIDER_CONTRACT_VERSION = "1"
@@ -164,13 +164,13 @@ class SopsDotenvFileProvider:
     def key_resource_types(self) -> tuple[str, ...]:
         return _KEY_RESOURCE_TYPES
 
-    def read_source(self, path: Path) -> str:
+    def read_source(self, path: Path, *, encrypted_selectors: Sequence[str] = ()) -> str:
         """Safely decrypt one encrypted dotenv snapshot into process memory."""
 
         source = normalize_sops_dotenv_file_path(path)
         try:
             with temporary_regular_copy(source, max_bytes=_MAX_SOPS_FILE_BYTES) as (temporary, _snapshot):
-                return self._command.decrypt_dotenv(temporary)
+                return self._command.decrypt_dotenv(temporary, encrypted_selectors=encrypted_selectors)
         except SopsError:
             raise
         except (OSError, UnsafeInputPathError, UnsafeOutputPathError):
@@ -217,7 +217,7 @@ class SopsDotenvFileProvider:
         replacements: dict[str, str] = {}
         try:
             with temporary_regular_copy(path, max_bytes=_MAX_SOPS_FILE_BYTES) as (temporary, snapshot):
-                before = self._command.decrypt_dotenv(temporary)
+                before = self._command.decrypt_dotenv(temporary, encrypted_selectors=binding.selectors)
                 validate_dotenv_assignments(before, binding.selectors)
                 selected_values = dotenv_selected_values(before, binding.selectors)
                 state, replacements = transition_credential_values(
@@ -241,7 +241,7 @@ class SopsDotenvFileProvider:
                     before = ""
                     for selector in binding.selectors:
                         self._command.set_dotenv_value(temporary, selector, replacements[selector])
-                    after = self._command.decrypt_dotenv(temporary)
+                    after = self._command.decrypt_dotenv(temporary, encrypted_selectors=binding.selectors)
                     validate_dotenv_assignments(after, binding.selectors)
                     selected_values.clear()
                     selected_values = dotenv_selected_values(after, binding.selectors)
@@ -272,6 +272,8 @@ class SopsDotenvFileProvider:
                 commit_regular_copy(snapshot, temporary, max_bytes=_MAX_SOPS_FILE_BYTES)
         except ProviderOperationError:
             raise
+        except SopsEncryptionError as error:
+            raise ProviderOperationError(error.code, str(error)) from None
         except SecretInputError:
             raise ProviderOperationError(
                 "sops-file-update-contract-invalid",
@@ -310,7 +312,7 @@ class SopsDotenvFileProvider:
         content = ""
         values: dict[str, str | None] = {}
         try:
-            content = self.read_source(path)
+            content = self.read_source(path, encrypted_selectors=binding.selectors)
             values = dotenv_selected_values(content, binding.selectors)
             matches = credential_values_match(
                 values,
@@ -319,6 +321,8 @@ class SopsDotenvFileProvider:
                 resource_name=resource.name,
                 expected_key=expected_key,
             )
+        except SopsEncryptionError as error:
+            raise ProviderOperationError(error.code, str(error)) from None
         except SecretInputError:
             raise ProviderOperationError(
                 "sops-file-verification-contract-invalid",

@@ -7,6 +7,9 @@
   defines the one reviewed structured credential value supported across local
   dotenv, SOPS dotenv, refresh, and App Service settings.
 
+- [SOPS dotenv confidentiality](sops-dotenv-confidentiality.md) defines the
+  per-managed-field encryption proof for export, refresh, and rotation.
+
 Research documents may justify one reviewed official or observed adapter shape.
 They do not authorize dynamic probing or imply support for another Azure
 resource or binding category.

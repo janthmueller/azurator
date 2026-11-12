@@ -158,9 +158,17 @@
             (pkgs.lib.makeBinPath [ pkgs.sops ])
           ];
 
-          nativeCheckInputs = with pythonPackages; [
-            pytestCheckHook
+          nativeCheckInputs = [
+            pythonPackages.pytestCheckHook
+            pkgs.sops
+            pkgs.age
           ];
+
+          preCheck = ''
+            # The required CI check must run the real SOPS regressions, not skip them.
+            sops --disable-version-check --version
+            age-keygen --version
+          '';
 
           pythonImportsCheck = [
             "azurator"
@@ -478,19 +486,24 @@
         formatter = pkgs.nixfmt;
 
         devShells.default = pkgs.mkShell {
-          packages = [
-            pythonEnv
-            pkgs.age
-            pkgs.azure-cli
-            pkgs.bicep
-            pkgs.jq
-            pkgs.nodejs_24
-            pkgs.pnpm
-            pkgs.pyright
-            pkgs.ruff
-            pkgs.sops
-            pkgs.uv
-          ];
+          packages =
+            [
+              pythonEnv
+              pkgs.age
+              pkgs.azure-cli
+              pkgs.bicep
+              pkgs.jq
+              pkgs.nodejs_24
+              pkgs.pnpm
+              pkgs.pyright
+              pkgs.ruff
+              pkgs.sops
+              pkgs.uv
+            ]
+            ++ pkgs.lib.optionals pkgs.stdenv.isLinux [
+              pkgs.bubblewrap
+              pkgs.util-linux
+            ];
 
           shellHook = ''
             unset PYTHONPATH

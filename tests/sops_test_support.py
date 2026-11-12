@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import base64
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from pathlib import Path
 
 from azurator.inputs import replace_dotenv_values
@@ -17,7 +17,9 @@ class FakeSopsCommand:
         self.change_unselected = False
         self.on_set: Callable[[], None] | None = None
 
-    def decrypt_dotenv(self, path: Path) -> str:
+    def decrypt_dotenv(self, path: Path, *, encrypted_selectors: Sequence[str] = ()) -> str:
+        # Every assignment in this opaque fake format is encoded together.
+        del encrypted_selectors
         payload = path.read_bytes()
         if not payload.startswith(_PREFIX):
             raise RuntimeError("invalid fake ciphertext")

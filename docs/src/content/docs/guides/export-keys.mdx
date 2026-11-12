@@ -22,6 +22,9 @@ decrypts the generated document in memory to verify every assignment before it
 creates the ciphertext file. Environment selector names and SOPS metadata remain
 visible in the encrypted dotenv format.
 
+Every exported key must be encrypted. If a SOPS exclusion rule leaves one in
+plaintext, Azurator stops without creating the output.
+
 Create an explicitly plaintext dotenv file with:
 
 ```bash
@@ -126,6 +129,7 @@ SOPS refresh updates one encrypted temporary and verifies mapped and unmapped
 assignments before replacing the original once. It preserves the existing SOPS
 recipients while SOPS controls ciphertext formatting. Plaintext and SOPS
 refresh both ask once for confirmation unless `-y` is used.
+Mapped keys excluded from SOPS encryption are rejected before updates.
 
 ## Destination guarantees
 

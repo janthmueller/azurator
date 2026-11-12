@@ -83,9 +83,15 @@ def test_sops_set_sends_the_replacement_only_over_stdin(
     def accept_encrypted(_path: Path) -> None:
         return None
 
+    def decrypt(_path: Path, *, encrypted_selectors: tuple[str, ...]) -> str:
+        assert encrypted_selectors == ("AZURE_KEY",)
+        assert recorded_arguments is None
+        return "AZURE_KEY=old-value\n"
+
     command = SopsCli(executable="/synthetic/sops")
     monkeypatch.setattr(command, "_ensure_version", accept_version)
     monkeypatch.setattr(command, "_require_encrypted", accept_encrypted)
+    monkeypatch.setattr(command, "decrypt_dotenv", decrypt)
     monkeypatch.setattr(subprocess, "Popen", popen)
 
     command.set_dotenv_value(source, "AZURE_KEY", replacement)
@@ -140,7 +146,7 @@ def test_sops_export_verification_reads_ciphertext_from_stdin(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     destination = tmp_path / "secrets.enc.env"
-    ciphertext = bytearray(b"ciphertext-must-not-enter-argv")
+    ciphertext = bytearray(b"TOKEN=ENC[AES256_GCM,data:ZmFrZQ==,iv:ZmFrZQ==,tag:ZmFrZQ==,type:str]\n")
     process = _CommunicatingProcess(b"TOKEN=decrypted-value\n")
     recorded_arguments: tuple[str, ...] | None = None
 

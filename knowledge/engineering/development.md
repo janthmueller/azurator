@@ -11,6 +11,8 @@ status: stable
 Azurator is a flat-layout Python project managed with uv. Nix provides the
 reproducible Python, Azure CLI, SOPS, age, Node.js, pnpm, Bicep, lint, type, and
 packaging tools used by the repository.
+On Linux, the dev shell also provides Bubblewrap and `prlimit` for isolated
+offline security checks.
 
 ## Set up the environment
 
@@ -46,6 +48,10 @@ uv run --locked python .github/scripts/check_knowledge.py
 
 Tests use fake providers and mocked clients. They may invoke local SOPS and age
 with generated test data but must never contact Azure.
+The mandatory Nix package check provides pinned SOPS and age and checks both
+executables before pytest, so the real encryption regressions cannot silently
+skip for missing tools. Other Python environments may skip those tests when
+the external tools are unavailable.
 
 ## Documentation
 

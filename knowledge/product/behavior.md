@@ -181,9 +181,15 @@ SOPS 3.13.x before key retrieval, encrypts the at-most-1-MiB document from stdin
 using the absolute destination as `--filename-override`, captures at most 8 MiB
 of ciphertext, decrypts it again from stdin, and compares the complete
 assignment map through fresh HMAC fingerprints before exclusively creating the
-mode-`0600` ciphertext destination. It never prints values, writes SOPS
-plaintext to disk, replaces an existing path, or writes a plan or recovery
-operation. When a companion map is requested, both contents are fully staged
+mode-`0600` ciphertext destination. Before persistence, the reviewed SOPS
+adapter also requires every exported
+assignment to have a canonical AES-GCM string envelope and to differ from its
+decrypted value. This proves actual per-field decryption, rather than accepting
+document-wide status or an excluded value that merely resembles ciphertext.
+Excluded or unknown field representations stop export without creating output.
+It never prints values, writes SOPS plaintext to disk, replaces an existing
+path, or writes a plan or recovery operation. When a companion map is requested,
+both contents are fully staged
 before an ordered exclusive commit. The secret-free map is linked first and
 the dotenv destination second. A handled failure removes outputs already
 created by the call only while they still reference the exact staged inode.
@@ -218,8 +224,11 @@ preserving its POSIX mode, owner, and group. SOPS refresh modifies one private
 encrypted temporary through the reviewed `sops set --value-stdin` contract,
 decrypts it in memory, verifies every mapped value and every unmapped assignment
 through fresh HMAC fingerprints, rechecks the source snapshot, and atomically
-replaces it once. It preserves existing SOPS recipient configuration rather
-than applying creation rules again. SOPS owns ciphertext formatting. Neither
+replaces it once. Before key retrieval, SOPS refresh also requires every mapped
+assignment to be genuinely encrypted. The same per-field check precedes updates,
+including no-ops, and follows decryption of the updated temporary. It preserves
+existing SOPS recipient configuration rather than applying creation rules again.
+SOPS owns ciphertext formatting. Neither
 mode writes a plaintext temporary, prints key values,
 updates Azure bindings, creates a plan, or creates recovery state.
 
@@ -239,6 +248,11 @@ mappings. It fails rather than creating an empty or ambiguous map. Unmatched and
 empty assignments are not included. The map contains no values, fingerprints,
 source path, generated timestamp, provider output, binding data, or warning
 history. Loading rejects duplicate JSON member names at every object level.
+
+For SOPS input, confirmed Azure-key assignments must also be genuinely encrypted
+before they are admitted as managed bindings. Fields excluded by SOPS policy
+stop matching/planning/rotation with a secret-free error. Unmatched deliberately
+plaintext fields remain allowed.
 
 ### Metadata inventory
 

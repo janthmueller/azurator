@@ -570,6 +570,23 @@ can still change the file immediately after that commit.
 
 ### Decrypted-content leakage during managed SOPS updates
 
+Managed SOPS fields must have the pinned AES-GCM string representation and
+must change when SOPS decrypts them. File-wide encrypted status and a successful
+value round trip alone do not prove encryption: an excluded field can remain
+plaintext, even if its value happens to resemble an encryption record. The
+shared adapter checks both representation and actual transformation, without
+emulating SOPS's Go regular-expression or comment-selection rules. Its reviewed
+contract and evidence are in [SOPS confidentiality research](../research/sops-dotenv-confidentiality.md).
+
+Export requires this proof for every generated assignment before staging any
+output. SOPS file matching requires it for confirmed Azure key matches before
+attaching managed bindings or producing a plan. Refresh requires it for all
+mapped selectors before key retrieval. Updates and verification repeat it for
+their selected fields; the set adapter additionally checks the field before
+passing a replacement to SOPS. Excluded fields fail with a fixed, secret-free
+encryption-policy error, including otherwise unchanged values. Unrelated
+intentionally plaintext fields remain permitted in existing SOPS documents.
+
 The implemented adapter accepts SOPS-encrypted dotenv only. It invokes SOPS
 without a shell and with explicit input and output types. Key replacements are
 JSON strings sent through `--value-stdin`; stderr and failed command output are

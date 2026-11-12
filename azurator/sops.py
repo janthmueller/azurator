@@ -6,15 +6,28 @@ import json
 import re
 import shutil
 import subprocess
+from collections.abc import Sequence
+from io import StringIO
 from pathlib import Path
 from typing import Protocol, cast
 
-from azurator.files import MAX_OPERATION_ARTIFACT_BYTES
-from azurator.inputs import MAX_DOTENV_FILE_BYTES, SecretInputError, validate_dotenv_selector
+from azurator.files import MAX_OPERATION_ARTIFACT_BYTES, read_regular_text
+from azurator.fingerprints import secret_values_equal
+from azurator.inputs import (
+    MAX_DOTENV_FILE_BYTES,
+    SecretInputError,
+    consume_dotenv,
+    dotenv_selected_values,
+    validate_dotenv_selector,
+)
 
 _SUPPORTED_VERSION = re.compile(r"sops 3\.13\.\d+\s*")
 _MAX_STATUS_BYTES = 4_096
 MAX_SOPS_DOTENV_FILE_BYTES = MAX_OPERATION_ARTIFACT_BYTES
+_ENCRYPTED_STRING = re.compile(
+    r"ENC\[AES256_GCM,data:[A-Za-z0-9+/]+={0,2},iv:[A-Za-z0-9+/]+={0,2},"
+    r"tag:[A-Za-z0-9+/]+={0,2},type:str\]"
+)
 
 
 class SopsError(RuntimeError):
@@ -25,10 +38,20 @@ class SopsError(RuntimeError):
         self.code = code
 
 
+class SopsEncryptionError(SopsError):
+    """A managed assignment is not protected by the file's SOPS policy."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            "sops-values-not-encrypted",
+            "SOPS did not encrypt every managed key. Check the file's encryption rules.",
+        )
+
+
 class SopsCommand(Protocol):
     """The exact SOPS operations used by the managed encrypted-dotenv provider."""
 
-    def decrypt_dotenv(self, path: Path) -> str: ...
+    def decrypt_dotenv(self, path: Path, *, encrypted_selectors: Sequence[str] = ()) -> str: ...
 
     def set_dotenv_value(self, path: Path, selector: str, value: str) -> None: ...
 
@@ -105,7 +128,9 @@ class SopsCli:
             max_bytes=MAX_DOTENV_FILE_BYTES,
         )
         try:
-            return output.decode("utf-8")
+            plaintext = output.decode("utf-8")
+            _require_encrypted_values(ciphertext.decode("utf-8"), plaintext)
+            return plaintext
         except UnicodeError:
             raise SopsError(
                 "sops-dotenv-output-invalid",
@@ -114,7 +139,7 @@ class SopsCli:
         finally:
             output[:] = b"\x00" * len(output)
 
-    def decrypt_dotenv(self, path: Path) -> str:
+    def decrypt_dotenv(self, path: Path, *, encrypted_selectors: Sequence[str] = ()) -> str:
         """Decrypt one caller-owned safe temporary as strict dotenv in memory."""
 
         self._require_encrypted(path)
@@ -125,7 +150,11 @@ class SopsCli:
             max_bytes=MAX_DOTENV_FILE_BYTES,
         )
         try:
-            return output.decode("utf-8")
+            plaintext = output.decode("utf-8")
+            if encrypted_selectors:
+                ciphertext = read_regular_text(path, max_bytes=MAX_SOPS_DOTENV_FILE_BYTES)
+                _require_encrypted_values(ciphertext, plaintext, encrypted_selectors)
+            return plaintext
         except UnicodeError:
             raise SopsError(
                 "sops-dotenv-output-invalid",
@@ -150,6 +179,9 @@ class SopsCli:
                 "A SOPS dotenv replacement value does not satisfy the supported format.",
             )
 
+        # SOPS uses the same metadata/path predicate for decryption and encryption.
+        # Prove that it decrypted this field before letting `set` persist a new key.
+        self.decrypt_dotenv(path, encrypted_selectors=(selector,))
         executable = self._executable()
         self._ensure_version(executable)
         payload = bytearray(json.dumps(value, ensure_ascii=True).encode("utf-8"))
@@ -307,3 +339,53 @@ class SopsCli:
                 "The installed SOPS version is outside the supported 3.13.x range.",
             )
         self._version_checked = True
+
+
+def _require_encrypted_values(
+    ciphertext: str,
+    plaintext: str,
+    selectors: Sequence[str] | None = None,
+) -> None:
+    """Require real SOPS field decryption, not just document-wide metadata.
+
+    The pinned dotenv store emits NAME=VALUE lines and AES-GCM string records.
+    An excluded field can itself contain a record-looking string, so checking
+    the envelope alone is insufficient: SOPS must also have transformed it.
+    This uses SOPS's actual selection decision rather than emulating Go regexes.
+    """
+
+    decrypted: dict[str, str | None] = {}
+    encrypted: dict[str, str] = {}
+    try:
+        if selectors is None:
+            result = consume_dotenv(
+                StringIO(plaintext, newline=""),
+                lambda selector, value: decrypted.__setitem__(selector, value),
+            )
+            if result.skipped_empty_selectors or not decrypted:
+                raise SopsEncryptionError()
+        else:
+            decrypted = dotenv_selected_values(plaintext, tuple(selectors))
+
+        for line in ciphertext.split("\n"):
+            selector, separator, value = line.removesuffix("\r").partition("=")
+            if separator and selector in decrypted:
+                if selector in encrypted:
+                    raise SopsEncryptionError()
+                encrypted[selector] = value
+        for selector, value in decrypted.items():
+            stored = encrypted.get(selector)
+            if (
+                stored is None
+                or value is None
+                or _ENCRYPTED_STRING.fullmatch(stored) is None
+                or secret_values_equal(stored, value)
+            ):
+                raise SopsEncryptionError()
+    except SecretInputError:
+        raise SopsEncryptionError() from None
+    finally:
+        ciphertext = ""
+        plaintext = ""
+        decrypted.clear()
+        encrypted.clear()

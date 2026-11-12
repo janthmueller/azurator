@@ -20,6 +20,9 @@ users. Decrypted dotenv content is limited to 1 MiB.
 SOPS resolves its identities through its normal configuration. Do not put a
 private identity or raw key in the command line.
 
+Matched Azure keys must be encrypted. Azurator rejects keys excluded by SOPS
+rules such as `_unencrypted`. Other fields may remain intentionally unencrypted.
+
 ## Inspect, preview, and rotate
 
 ```bash

@@ -31,7 +31,7 @@ from azurator.inputs import (
     validate_dotenv_selector,
 )
 from azurator.models import DotenvKeyAssignment
-from azurator.sops import SopsCommand, SopsError
+from azurator.sops import SopsCommand, SopsEncryptionError, SopsError
 
 
 class RefreshError(RuntimeError):
@@ -163,11 +163,13 @@ class SopsDotenvRefreshService:
         values: dict[str, str | None] = {}
         try:
             with temporary_regular_copy(path, max_bytes=MAX_OPERATION_ARTIFACT_BYTES) as (temporary, _snapshot):
-                content = self._command.decrypt_dotenv(temporary)
+                content = self._command.decrypt_dotenv(temporary, encrypted_selectors=selected)
                 values = dotenv_selected_values(content, selected)
         except RefreshError:
             raise
         except SecretInputError as error:
+            raise RefreshError(str(error)) from None
+        except SopsEncryptionError as error:
             raise RefreshError(str(error)) from None
         except (SopsError, OSError, UnicodeError, UnsafeInputPathError, UnsafeOutputPathError):
             raise RefreshError("the SOPS dotenv file is missing, unsafe, invalid, or could not be decrypted") from None
@@ -195,7 +197,7 @@ class SopsDotenvRefreshService:
         try:
             desired = _desired_values(current_dotenv, selected)
             with temporary_regular_copy(path, max_bytes=MAX_OPERATION_ARTIFACT_BYTES) as (temporary, snapshot):
-                before = self._command.decrypt_dotenv(temporary)
+                before = self._command.decrypt_dotenv(temporary, encrypted_selectors=selected)
                 with EphemeralFingerprinter() as fingerprinter:
                     before_fingerprints = _dotenv_fingerprints(before, fingerprinter)
                     _require_present_selectors(before_fingerprints, selected)
@@ -209,7 +211,7 @@ class SopsDotenvRefreshService:
                         if selector in replacements:
                             self._command.set_dotenv_value(temporary, selector, replacements[selector])
 
-                    after = self._command.decrypt_dotenv(temporary)
+                    after = self._command.decrypt_dotenv(temporary, encrypted_selectors=selected)
                     after_fingerprints = _dotenv_fingerprints(after, fingerprinter)
                     verified = dotenv_selected_values(after, selected)
                     after = ""
@@ -235,6 +237,8 @@ class SopsDotenvRefreshService:
             raise
         except SecretInputError as error:
             raise RefreshError(str(error)) from None
+        except SopsEncryptionError as error:
+            raise RefreshError(str(error)) from None
         except (SopsError, OSError, UnicodeError, UnsafeInputPathError, UnsafeOutputPathError):
             raise RefreshError("the SOPS dotenv file changed or could not be refreshed safely") from None
         finally:
@@ -256,12 +260,14 @@ class SopsDotenvRefreshService:
         values: dict[str, str | None] = {}
         try:
             with temporary_regular_copy(path, max_bytes=MAX_OPERATION_ARTIFACT_BYTES) as (temporary, _snapshot):
-                content = self._command.decrypt_dotenv(temporary)
+                content = self._command.decrypt_dotenv(temporary, encrypted_selectors=selected)
                 values = dotenv_selected_values(content, selected)
                 _validate_existing_mappings(values, assignments_by_selector)
         except RefreshError:
             raise
         except SecretInputError as error:
+            raise RefreshError(str(error)) from None
+        except SopsEncryptionError as error:
             raise RefreshError(str(error)) from None
         except (SopsError, OSError, UnicodeError, UnsafeInputPathError, UnsafeOutputPathError):
             raise RefreshError("the SOPS dotenv file changed before refresh") from None

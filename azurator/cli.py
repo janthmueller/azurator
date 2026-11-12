@@ -163,7 +163,7 @@ from azurator.refreshing import (
     RefreshError,
     SopsDotenvRefreshService,
 )
-from azurator.sops import SopsCli, SopsError
+from azurator.sops import SopsCli, SopsEncryptionError, SopsError
 from azurator.workflows import RotationPlanningWorkflow
 
 app = typer.Typer(
@@ -308,7 +308,8 @@ def _match_sops_dotenv_file(
     content = ""
     stream: _EphemeralStringIO | None = None
     try:
-        content = SopsDotenvFileProvider().read_source(source)
+        provider = SopsDotenvFileProvider()
+        content = provider.read_source(source)
         stream = _EphemeralStringIO(content, newline="")
         content = ""
         report = _match_dotenv(
@@ -316,6 +317,10 @@ def _match_sops_dotenv_file(
             stream,
             skip_azure_bindings=skip_azure_bindings,
         )
+        matched_selectors = tuple(dict.fromkeys(match.input_selector for match in report.matches))
+        if matched_selectors:
+            content = provider.read_source(source, encrypted_selectors=matched_selectors)
+            content = ""
         return attach_sops_dotenv_file_bindings(report, source), source
     finally:
         content = ""
@@ -1273,6 +1278,8 @@ def export_keys(
         _fail("Azure key export failed while reading a selected key resource; no file was created")
     except (HttpResponseError, ServiceRequestError, ServiceResponseError):
         _fail("Azure key export failed; no file was created")
+    except SopsEncryptionError as error:
+        _fail(f"{error}; no file was created")
     except SopsError:
         _fail("SOPS could not create and verify the encrypted dotenv export; no file was created")
     except ExportError as error:
